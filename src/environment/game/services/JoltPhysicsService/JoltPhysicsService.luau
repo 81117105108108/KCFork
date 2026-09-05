@@ -10,6 +10,8 @@ local structs = jolt.structs
 local bodyMaker = require("@_BodyMaker")
 local RaycastResult = require("@RaycastResult")
 local NetworkOwnership = require("@NetworkOwnership")
+local KinemiumPhysicsModule = require("../../../../services/KinemiumPhysicsService")
+local physicsLoop = KinemiumPhysicsModule.shared
 
 local KinemiumPhysicsService = Instance.new("KinemiumPhysicsService")
 KinemiumPhysicsService.ExplorerHidden = true
@@ -2228,6 +2230,20 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 
 			DeltatimeMultiplier = 1,
 			CollisionSteps = 2,
+			FixedDt = physicsLoop.FixedDt,
+			MaxSubSteps = physicsLoop.MaxSubSteps,
+
+			GetInterpolationAlpha = function()
+				return physicsLoop:GetInterpolationAlpha()
+			end,
+
+			SetFixedDt = function(fixedDt)
+				physicsLoop:SetFixedDt(fixedDt)
+			end,
+
+			SetMaxSubSteps = function(maxSubSteps)
+				physicsLoop:SetMaxSubSteps(maxSubSteps)
+			end,
 
 			GetBodies = function()
 				return bodiesMap
@@ -2319,8 +2335,6 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				proxySyncMs = (os.clock() - proxySyncStart) * 1000
 
 				if next(movingBodiesMap) ~= nil or next(softBodiesMap) ~= nil then
-					renderer_signal:Fire("PrePhysics")
-					local _pst = os.clock()
 					local collisionSteps = math.clamp(
 						math.floor(
 							(KinemiumPhysicsService.CollisionSteps or 2)
@@ -2330,13 +2344,17 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 						1,
 						8
 					)
-					lib.JPH_PhysicsSystem_Update(physicsSystem, dt, collisionSteps, jobSystem)
+					local _pst = os.clock()
+					local substeps, alpha = physicsLoop:Step(dt, function(fixedDt, _substepIdx)
+						renderer_signal:Fire("PrePhysics")
+						lib.JPH_PhysicsSystem_Update(physicsSystem, fixedDt, collisionSteps, jobSystem)
+						renderer_signal:Fire("PhysicsF")
+					end)
 					local _pdur = os.clock() - _pst
 					physicsStepMs = _pdur * 1000
 					if _pdur > 0.05 then
-						print(string.format("[Physics] JPH_PhysicsSystem_Update took %.2f ms", _pdur * 1000))
+						print(string.format("[Physics] Fixed-step Jolt update took %.2f ms (%d substeps, alpha=%.2f)", _pdur * 1000, substeps, alpha))
 					end
-					renderer_signal:Fire("PhysicsF")
 				end
 
 				local _syncStart = os.clock()
