@@ -1,6 +1,8 @@
+--!strict
 --!optimize 2
 --!native
 
+local resources = require("../engine/ffi/ResourceTracker").shared
 local task = zune.task
 local KiRend = {}
 
@@ -641,6 +643,7 @@ function KiRend.new(config: KiRendConf)
 
 	-- Matches the real renderer's lowercase `step` signature
 	function rendererObject:step(time)
+		resources:Sweep()
 		local frameStart = os.clock()
 		local frameSetupStart = frameStart
 
@@ -756,6 +759,11 @@ function KiRend.new(config: KiRendConf)
 	end
 
 	function rendererObject:Shutdown()
+		if rendererObject._shutdown then return end
+		rendererObject._shutdown = true
+		isRunning = false
+		local cleanupOK, cleanupError = pcall(resources.CollectAll, resources)
+		if not cleanupOK then warn(cleanupError) end
 		for _, callback in pairs(renderer_hooks.Shutdown) do
 			local success, result = pcall(callback)
 			if not success then

@@ -1,3 +1,5 @@
+--!strict
+local resources = require("../engine/ffi/ResourceTracker").shared
 local task = zune.task
 local KiRend = {}
 
@@ -948,6 +950,7 @@ function KiRend.new(config: KiRendConf)
 	end
 
 	function rendererObject:step(time)
+		resources:Sweep()
 		local frameStart = os.clock()
 		local frameSetupStart = frameStart
 
@@ -1132,6 +1135,8 @@ function KiRend.new(config: KiRendConf)
 		end
 		isShutdown = true
 		isRunning = false
+		local cleanupOK, cleanupError = pcall(resources.CollectAll, resources)
+		if not cleanupOK then warn(cleanupError) end
 		for _, callback in pairs(renderer_hooks.Shutdown) do
 			local success, result = pcall(callback)
 			if not success then

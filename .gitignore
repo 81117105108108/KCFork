@@ -20,3 +20,7 @@ ignored
 .temp
 zune.pdb
 zune
+.codebase-memory/
+.opencode/
+.token-optimizer/
+filelist.txt

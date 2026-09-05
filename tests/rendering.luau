@@ -1,3 +1,4 @@
+--!strict
 -- Run from the repository root: zune run tests/rendering.luau
 -- Executes the production modules with deterministic graphics/FFI test doubles.
 local runtime = zune
@@ -59,6 +60,10 @@ local function makeRenderer(backend)
 		}
 	end
 	local libs = { ["@Kinemium.signal"] = signal, ["@Argon"] = argon, ["@meshgen"] = { setWindow = function() end } }
+	libs["../engine/ffi/ResourceTracker"] = { shared = {
+		Sweep = function() record("ResourceSweep") end,
+		CollectAll = function() record("ResourceDrain") end,
+	} }
 	local module = loadModule("src/renderer/init.luau", {
 		require = function(name) assert(libs[name], name); return libs[name] end,
 		zune = { task = { wait = function() end }, process = { exit = function(code) record("exit", code) end } },
@@ -80,6 +85,7 @@ test("render hooks run before scene submission and presentation", function()
 	renderer.Pool.new("3d", function() equal(current, 42) end)
 	renderer:Step()
 	assert(findCall(calls, "PollEvents") < findCall(calls, "PreRender"))
+	assert(findCall(calls, "ResourceSweep") < findCall(calls, "PollEvents"))
 	assert(findCall(calls, "RenderStepped") < findCall(calls, "Begin3D"))
 	assert(findCall(calls, "Render3D") < findCall(calls, "Heartbeat"))
 	assert(renderer.Frametime >= 0)
@@ -200,6 +206,7 @@ test("shutdown frees owned resources once and skips borrowed surfaces", function
 	renderer.Window._vulkanCompositorFrameSurface = borrowed
 	renderer.Window._rasterUIHandle = raster
 	renderer:Shutdown()
+	assert(findCall(calls, "ResourceDrain") < findCall(calls, "Shutdown"))
 	local surfaces, textures, shutdowns = 0, 0, 0
 	for _, call in ipairs(calls) do
 		if call.name == "DestroySkiaSurface" then

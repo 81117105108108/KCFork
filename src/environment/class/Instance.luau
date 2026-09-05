@@ -1,8 +1,16 @@
+--!strict
+-- Class extensions add heterogeneous properties and methods at runtime.
+export type InstanceObject = { [string]: any }
 local Instance = {}
+local InstanceLifecycle = require("../../engine/ffi/InstanceLifecycle")
 local Signal = require("@Kinemium.signal")
 local task = _G.zune.task
 local nextUniqueId = 1
-local cloneInitializer = nil
+local cloneInitializer: ((InstanceObject, InstanceObject) -> ())? = nil
+
+local function childrenOf(instance: InstanceObject): { InstanceObject }
+	return rawget(instance, "_children") or {}
+end
 
 local function generateUniqueId()
 	local id = nextUniqueId
@@ -24,7 +32,7 @@ local SIGNAL_NAMES = {
 	DescendantChanged = true,
 }
 
-function instance_mt.__index(self, key)
+function instance_mt.__index(self: InstanceObject, key: string): any
 	local props = rawget(self, "_props")
 	if props and props[key] ~= nil then
 		local val = props[key]
@@ -53,7 +61,7 @@ function instance_mt.__index(self, key)
 	return nil
 end
 
-function instance_mt.__eq(a, b)
+function instance_mt.__eq(a: InstanceObject, b: InstanceObject): boolean
 	if type(a) ~= "table" or type(b) ~= "table" then
 		return false
 	end
@@ -64,7 +72,7 @@ function instance_mt.__eq(a, b)
 	return a._props.UniqueId == b._props.UniqueId
 end
 
-function instance_mt.__tostring(self)
+function instance_mt.__tostring(self: InstanceObject): string
 	if self.Destroyed then
 		return "Instance <destroyed>"
 	end
@@ -77,10 +85,14 @@ function instance_mt.__tostring(self)
 	return string.format('%s "%s" (%s)', props.ClassName or "Instance", props.Name or "?", self:GetFullName())
 end
 
-function instance_mt.__newindex(self, key, value)
+function instance_mt.__newindex(self: InstanceObject, key: string, value: any): ()
 	local props = rawget(self, "_props")
 	if not props then
 		return
+	end
+	if key == "Parent" and value ~= nil then
+		assert(not rawget(self, "_destroying"), "Cannot reparent a destroying Instance")
+		assert(not rawget(value, "Destroyed") and not rawget(value, "_destroying"), "Cannot parent to a destroyed Instance")
 	end
 
 	-- Barrier check: allows validating/transforming/blocking a property write
@@ -228,8 +240,8 @@ function instance_mt.__newindex(self, key, value)
 	end
 end
 
-function Instance.new(className)
-	local self = {
+function Instance.new(className: string): InstanceObject
+	local self: InstanceObject = {
 		BaseClass = "Instance",
 		_children = {},
 		_childByName = {},
@@ -254,19 +266,30 @@ function Instance.new(className)
 		NetworkOwnerType = 0,
 	}
 
-	return setmetatable(self, instance_mt)
+	setmetatable(self, instance_mt)
+	return (self :: unknown) :: InstanceObject
 end
 
-function Instance.SetCloneInitializer(callback)
+function Instance.SetCloneInitializer(callback: ((InstanceObject, InstanceObject) -> ())?): ()
 	cloneInitializer = callback
 end
 
-local function copyState(source, target, keepUniqueId)
+local function copyProperty(target: InstanceObject, props: { [string]: any }, key: string, value: any): ()
+	local cloners = rawget(target, "_propertyCloners")
+	if cloners and cloners[key] then
+		target[key] = cloners[key](value)
+	else
+		props[key] = value
+	end
+end
+
+local function copyState(source: InstanceObject, target: InstanceObject, keepUniqueId: boolean?): ()
 	local srcProps = rawget(source, "_props")
 	local dstProps = rawget(target, "_props")
+	assert(srcProps and dstProps, "Cannot copy a destroyed Instance")
 	for k, v in pairs(srcProps) do
 		if k ~= "Parent" and (keepUniqueId or k ~= "UniqueId") then
-			dstProps[k] = v
+			copyProperty(target, dstProps, k, v)
 		end
 	end
 
@@ -278,8 +301,8 @@ local function copyState(source, target, keepUniqueId)
 	end
 end
 
-local function resetCloneHierarchy(clone)
-	local children = rawget(clone, "_children")
+local function resetCloneHierarchy(clone: InstanceObject): ()
+	local children = childrenOf(clone)
 	if children then
 		for _, child in ipairs(children) do
 			local props = rawget(child, "_props")
@@ -298,33 +321,38 @@ local function resetCloneHierarchy(clone)
 	end
 end
 
-local function createCloneShell(source, keepUniqueId)
-	local clone = Instance.new(source.ClassName)
-
-	if cloneInitializer then
-		local success, err = pcall(function()
-			cloneInitializer(source, clone)
-		end)
-		if not success then
-			_G.warn(`CLASS: Failed to initialize clone of {source.ClassName}: {err}`)
-		end
+local function failClone(clone: InstanceObject, failure: unknown): never
+	local cleaned, cleanupFailure = pcall(clone.Destroy, clone)
+	local message = if type(failure) == "string" then failure else "Clone failed"
+	if not cleaned then
+		message ..= "; cleanup failed: " .. (if type(cleanupFailure) == "string" then cleanupFailure else "non-string error")
 	end
+	error(message, 2)
+end
 
-	resetCloneHierarchy(clone)
-	copyState(source, clone, keepUniqueId)
+local function createCloneShell(source: InstanceObject, keepUniqueId: boolean?): InstanceObject
+	local clone = Instance.new(source.ClassName)
+	local success, failure = pcall(function()
+		if cloneInitializer then
+			cloneInitializer(source, clone)
+		end
+		resetCloneHierarchy(clone)
+		copyState(source, clone, keepUniqueId)
+	end)
+	if not success then failClone(clone, failure) end
 	return clone
 end
 
 -- Utility methods
-function Instance:GetProperties()
+function Instance.GetProperties(self: InstanceObject): { [string]: any }?
 	return rawget(self, "_props")
 end
 
-function Instance:SetProperty(name, value)
+function Instance.SetProperty(self: InstanceObject, name: string, value: any): ()
 	self[name] = value -- triggers __newindex
 end
 
-function Instance:FindFirstChild(name)
+function Instance.FindFirstChild(self: InstanceObject, name: string): InstanceObject?
 	local childMap = rawget(self, "_childByName")
 	if childMap and childMap[name] then
 		return childMap[name]
@@ -332,7 +360,7 @@ function Instance:FindFirstChild(name)
 	return nil
 end
 
-function Instance:FindFirstAncestor(name)
+function Instance.FindFirstAncestor(self: InstanceObject, name: string): InstanceObject?
 	local ancestor = self.Parent
 	while ancestor do
 		if ancestor.Name == name then
@@ -343,9 +371,9 @@ function Instance:FindFirstAncestor(name)
 	return nil
 end
 
-function Instance:GetChildrenOfClass(className)
+function Instance.GetChildrenOfClass(self: InstanceObject, className: string): { InstanceObject }
 	local children = {}
-	for _, child in pairs(rawget(self, "_children")) do
+	for _, child in pairs(childrenOf(self)) do
 		if child.ClassName == className then
 			table.insert(children, child)
 		end
@@ -353,8 +381,8 @@ function Instance:GetChildrenOfClass(className)
 	return children
 end
 
-function Instance:FindFirstChildOfClass(className)
-	for _, child in ipairs(rawget(self, "_children")) do
+function Instance.FindFirstChildOfClass(self: InstanceObject, className: string): InstanceObject?
+	for _, child in ipairs(childrenOf(self)) do
 		if child.ClassName == className then
 			return child
 		end
@@ -362,19 +390,19 @@ function Instance:FindFirstChildOfClass(className)
 	return nil
 end
 
-function Instance:GetChildren()
+function Instance.GetChildren(self: InstanceObject): { InstanceObject }
 	local copy = {}
-	for i, child in ipairs(rawget(self, "_children")) do
+	for i, child in ipairs(childrenOf(self)) do
 		copy[i] = child
 	end
 	return copy
 end
 
-function Instance:GetDescendants()
+function Instance.GetDescendants(self: InstanceObject): { InstanceObject }
 	local result = {}
 
 	local function scan(obj)
-		for _, child in ipairs(rawget(obj, "_children")) do
+		for _, child in ipairs(childrenOf(obj)) do
 			table.insert(result, child)
 			scan(child)
 		end
@@ -384,11 +412,11 @@ function Instance:GetDescendants()
 	return result
 end
 
-function Instance:IterDescendants()
+function Instance.IterDescendants(self: InstanceObject): () -> InstanceObject?
 	local current = self
 
 	return function()
-		local currentChildren = rawget(current, "_children")
+		local currentChildren = childrenOf(current)
 		if currentChildren and #currentChildren > 0 then
 			current = currentChildren[1]
 			return current
@@ -397,7 +425,7 @@ function Instance:IterDescendants()
 		while current and current ~= self do
 			local parent = current.Parent
 			if parent then
-				local siblings = rawget(parent, "_children")
+				local siblings = childrenOf(parent)
 				local nextIdx = table.find(siblings, current)
 				if nextIdx and nextIdx < #siblings then
 					current = siblings[nextIdx + 1]
@@ -410,13 +438,13 @@ function Instance:IterDescendants()
 	end
 end
 
-function Instance:IsA(className)
+function Instance.IsA(self: InstanceObject, className: string): boolean
 	return self.ClassName == className or self.BaseClass == className
 end
 
-function Instance:Clone(keepUniqueId)
+function Instance.Clone(self: InstanceObject, keepUniqueId: boolean?): InstanceObject
 	local root = createCloneShell(self, keepUniqueId)
-
+	local success, failure = pcall(function()
 	local queue = { { src = self, dst = root } }
 	local head = 1
 
@@ -424,15 +452,15 @@ function Instance:Clone(keepUniqueId)
 		local pair = queue[head]
 		head = head + 1
 
-		local srcChildren = rawget(pair.src, "_children")
+		local srcChildren = childrenOf(pair.src)
 		local dstParent = pair.dst
 
 		for _, child in ipairs(srcChildren) do
 			local copy = createCloneShell(child, keepUniqueId)
 			local cDstProps = rawget(copy, "_props")
-
+			assert(cDstProps, "Clone initializer destroyed the new Instance")
 			cDstProps.Parent = dstParent
-			table.insert(rawget(dstParent, "_children"), copy)
+			table.insert(childrenOf(dstParent), copy)
 			local dstMap = rawget(dstParent, "_childByName")
 			if dstMap and not dstMap[copy.Name] then
 				dstMap[copy.Name] = copy
@@ -440,12 +468,13 @@ function Instance:Clone(keepUniqueId)
 			table.insert(queue, { src = child, dst = copy })
 		end
 	end
-
+	end)
+	if not success then failClone(root, failure) end
 	return root
 end
 
-function Instance:InheritFrom(source, baseline)
-	local function inheritSingle(dst, src, base)
+function Instance.InheritFrom(self: InstanceObject, source: InstanceObject, baseline: InstanceObject): ()
+	local function inheritSingle(dst: InstanceObject, src: InstanceObject, base: InstanceObject): ()
 		local dstProps = rawget(dst, "_props")
 		local srcProps = rawget(src, "_props")
 		local baseProps = rawget(base, "_props")
@@ -462,7 +491,7 @@ function Instance:InheritFrom(source, baseline)
 					if k == "Name" then
 						dst.Name = v -- Trigger __newindex to properly update _childByName
 					else
-						dstProps[k] = v
+						copyProperty(dst, dstProps, k, v)
 					end
 				end
 			end
@@ -512,7 +541,7 @@ function Instance:InheritFrom(source, baseline)
 	end
 end
 
-function Instance:RestoreFrom(source)
+function Instance.RestoreFrom(self: InstanceObject, source: InstanceObject): ()
 	local function restoreSingle(dst, src)
 		local dstProps = rawget(dst, "_props")
 		local srcProps = rawget(src, "_props")
@@ -526,7 +555,7 @@ function Instance:RestoreFrom(source)
 				if k == "Name" then
 					dst.Name = v -- Trigger __newindex to properly update _childByName
 				else
-					dstProps[k] = v
+					copyProperty(dst, dstProps, k, v)
 				end
 			end
 		end
@@ -560,20 +589,20 @@ function Instance:RestoreFrom(source)
 	end
 end
 
-function Instance:SetProperties(tbl)
+function Instance.SetProperties(self: InstanceObject, tbl: { [string]: any }): ()
 	for k, v in pairs(tbl) do
 		self:SetProperty(k, v)
 	end
 end
 
-function Instance:ClearAllChildren()
-	for _, child in ipairs(rawget(self, "_children")) do
+function Instance.ClearAllChildren(self: InstanceObject): ()
+	for _, child in ipairs(childrenOf(self)) do
 		child.Parent = nil
 	end
 	rawset(self, "_children", {})
 end
 
-function Instance:GetFullName()
+function Instance.GetFullName(self: InstanceObject): string
 	local names = {}
 	local cur = self
 	while cur do
@@ -583,7 +612,7 @@ function Instance:GetFullName()
 	return table.concat(names, ".")
 end
 
-function Instance:IsDescendantOf(ancestor)
+function Instance.IsDescendantOf(self: InstanceObject, ancestor: InstanceObject): boolean
 	local cur = self.Parent
 	while cur do
 		if cur == ancestor then
@@ -594,15 +623,15 @@ function Instance:IsDescendantOf(ancestor)
 	return false
 end
 
-function Instance:FindFirstChildWhichIsA(className, recursive)
-	for _, child in ipairs(rawget(self, "_children")) do
+function Instance.FindFirstChildWhichIsA(self: InstanceObject, className: string, recursive: boolean?): InstanceObject?
+	for _, child in ipairs(childrenOf(self)) do
 		if child.ClassName == className then
 			return child
 		end
 	end
 
 	if recursive then
-		for _, child in ipairs(rawget(self, "_children")) do
+		for _, child in ipairs(childrenOf(self)) do
 			local found = child:FindFirstChildWhichIsA(className, true)
 			if found then
 				return found
@@ -613,7 +642,7 @@ function Instance:FindFirstChildWhichIsA(className, recursive)
 	return nil
 end
 
-function Instance:FindFirstAncestorWhichIsA(className)
+function Instance.FindFirstAncestorWhichIsA(self: InstanceObject, className: string): InstanceObject?
 	local cur = self.Parent
 	while cur do
 		if cur.ClassName == className then
@@ -624,7 +653,7 @@ function Instance:FindFirstAncestorWhichIsA(className)
 	return nil
 end
 
-function Instance:GetPropertyChangedSignal(property)
+function Instance.GetPropertyChangedSignal(self: InstanceObject, property: string): typeof(Signal.new())
 	if not self._propertySignals then
 		self._propertySignals = {}
 	end
@@ -642,10 +671,10 @@ function Instance:GetPropertyChangedSignal(property)
 	return self._propertySignals[property]
 end
 
-function Instance:PrintTree(showClass)
+function Instance.PrintTree(self: InstanceObject, showClass: boolean?): ()
 	showClass = showClass ~= false
 
-	local function walk(node, prefix, isLast)
+	local function walk(node: InstanceObject, prefix: string, isLast: boolean): ()
 		local label
 
 		if showClass then
@@ -660,7 +689,7 @@ function Instance:PrintTree(showClass)
 			print(prefix .. (isLast and "└── " or "├── ") .. label)
 		end
 
-		local children = rawget(node, "_children")
+		local children = childrenOf(node)
 		local nextPrefix = prefix .. (isLast and "    " or "│   ")
 
 		for i, child in ipairs(children) do
@@ -671,7 +700,7 @@ function Instance:PrintTree(showClass)
 	walk(self, "", true)
 end
 
-function Instance:GetAttributes()
+function Instance.GetAttributes(self: InstanceObject): { [string]: any }
 	local copy = {}
 	for k, v in pairs(self.attributes) do
 		copy[k] = v
@@ -679,7 +708,7 @@ function Instance:GetAttributes()
 	return copy
 end
 
-function Instance:GetAttributeChangedSignal(name)
+function Instance.GetAttributeChangedSignal(self: InstanceObject, name: string): typeof(Signal.new())
 	if not self._attributeSignals then
 		self._attributeSignals = {}
 	end
@@ -694,32 +723,34 @@ end
 -- Barriers: allow validating/transforming/blocking writes to a given property.
 -- callback(value) -> false blocks the write, nil/true allows it unchanged,
 -- any other value replaces the written value.
-function Instance:SetBarrier(property, callback)
+function Instance.SetBarrier(self: InstanceObject, property: string, callback: (any) -> any): ()
 	local barriers = rawget(self, "_barriers")
 	if not barriers then
 		barriers = {}
 		rawset(self, "_barriers", barriers)
 	end
+	assert(barriers)
 	barriers[property] = callback
 end
 
-function Instance:RemoveBarrier(property)
+function Instance.RemoveBarrier(self: InstanceObject, property: string): ()
 	local barriers = rawget(self, "_barriers")
 	if barriers then
 		barriers[property] = nil
 	end
 end
 
-function Instance:_SetPropertyHandler(property, callback)
+function Instance._SetPropertyHandler(self: InstanceObject, property: string, callback: (...any) -> ()): ()
 	local handlers = rawget(self, "_propertyHandlers")
 	if not handlers then
 		handlers = {}
 		rawset(self, "_propertyHandlers", handlers)
 	end
+	assert(handlers)
 	handlers[property] = callback
 end
 
-function Instance:WaitForChild(name, timeout)
+function Instance.WaitForChild(self: InstanceObject, name: string, timeout: number?): InstanceObject?
 	timeout = timeout or 5
 
 	local found = self:FindFirstChild(name)
@@ -758,7 +789,7 @@ function Instance:WaitForChild(name, timeout)
 	return result
 end
 
-function Instance:SetAttribute(name, value)
+function Instance.SetAttribute(self: InstanceObject, name: string, value: any): ()
 	self.attributes[name] = value
 
 	if self._attributeSignals and self._attributeSignals[name] then
@@ -766,15 +797,15 @@ function Instance:SetAttribute(name, value)
 	end
 end
 
-function Instance:AddTag(tag)
+function Instance.AddTag(self: InstanceObject, tag: string): ()
 	self.tags[tag] = true
 end
 
-function Instance:RemoveTag(tag)
+function Instance.RemoveTag(self: InstanceObject, tag: string): ()
 	self.tags[tag] = nil
 end
 
-function Instance:GetTags()
+function Instance.GetTags(self: InstanceObject): { string }
 	local copy = {}
 	for k, v in pairs(self.tags) do
 		copy[k] = v
@@ -782,11 +813,11 @@ function Instance:GetTags()
 	return copy
 end
 
-function Instance:HasTag(tag)
+function Instance.HasTag(self: InstanceObject, tag: string): boolean
 	return self.tags[tag] == true
 end
 
-function Instance:GetAncestors()
+function Instance.GetAncestors(self: InstanceObject): { InstanceObject }
 	local result = {}
 	local cur = self.Parent
 	while cur do
@@ -796,7 +827,7 @@ function Instance:GetAncestors()
 	return result
 end
 
-function Instance:ForEachDescendant(filter, callback)
+function Instance.ForEachDescendant(self: InstanceObject, filter: ((InstanceObject) -> boolean)?, callback: (InstanceObject) -> ()): ()
 	for _, inst in ipairs(self:GetDescendants()) do
 		if not filter or filter(inst) then
 			callback(inst)
@@ -804,7 +835,7 @@ function Instance:ForEachDescendant(filter, callback)
 	end
 end
 
-function Instance:FindFirstAncestorOfClass(className)
+function Instance.FindFirstAncestorOfClass(self: InstanceObject, className: string): InstanceObject?
 	local ancestor = self.Parent
 	while ancestor do
 		if ancestor.ClassName == className then
@@ -815,7 +846,7 @@ function Instance:FindFirstAncestorOfClass(className)
 	return nil
 end
 
-function Instance:GetDescendantsOfClass(className)
+function Instance.GetDescendantsOfClass(self: InstanceObject, className: string): { InstanceObject }
 	local result = {}
 	for _, descendant in ipairs(self:GetDescendants()) do
 		if descendant.ClassName == className then
@@ -825,7 +856,7 @@ function Instance:GetDescendantsOfClass(className)
 	return result
 end
 
-function Instance:WaitForChildOfClass(className, timeout)
+function Instance.WaitForChildOfClass(self: InstanceObject, className: string, timeout: number?): InstanceObject?
 	timeout = timeout or 5
 
 	local found = self:FindFirstChildOfClass(className)
@@ -864,7 +895,7 @@ function Instance:WaitForChildOfClass(className, timeout)
 	return result
 end
 
-function Instance:WaitForChildWhichIsA(className, timeout)
+function Instance.WaitForChildWhichIsA(self: InstanceObject, className: string, timeout: number?): InstanceObject?
 	timeout = timeout or 5
 
 	local found = self:FindFirstChildWhichIsA(className)
@@ -903,11 +934,11 @@ function Instance:WaitForChildWhichIsA(className, timeout)
 	return result
 end
 
-function Instance:GetChildrenCount()
-	return #rawget(self, "_children")
+function Instance.GetChildrenCount(self: InstanceObject): number
+	return #childrenOf(self)
 end
 
-function Instance:FindFirstDescendant(name)
+function Instance.FindFirstDescendant(self: InstanceObject, name: string): InstanceObject?
 	for _, descendant in ipairs(self:GetDescendants()) do
 		if descendant.Name == name then
 			return descendant
@@ -916,9 +947,9 @@ function Instance:FindFirstDescendant(name)
 	return nil
 end
 
-function Instance:ClearChildren(className)
+function Instance.ClearChildren(self: InstanceObject, className: string?): ()
 	if className then
-		local children = rawget(self, "_children")
+		local children = childrenOf(self)
 		for i = #children, 1, -1 do
 			if children[i].ClassName == className then
 				children[i]:Destroy()
@@ -929,13 +960,13 @@ function Instance:ClearChildren(className)
 	end
 end
 
-function Instance:GetSiblings()
+function Instance.GetSiblings(self: InstanceObject): { InstanceObject }
 	if not self.Parent then
 		return {}
 	end
 
 	local siblings = {}
-	for _, child in ipairs(rawget(self.Parent, "_children")) do
+	for _, child in ipairs(childrenOf(self.Parent)) do
 		if child ~= self then
 			table.insert(siblings, child)
 		end
@@ -943,11 +974,11 @@ function Instance:GetSiblings()
 	return siblings
 end
 
-function Instance:IsAncestorOf(descendant)
+function Instance.IsAncestorOf(self: InstanceObject, descendant: InstanceObject): boolean
 	return descendant:IsDescendantOf(self)
 end
 
-function Instance:GetPath()
+function Instance.GetPath(self: InstanceObject): { InstanceObject }
 	local path = {}
 	local cur = self
 	while cur do
@@ -957,22 +988,22 @@ function Instance:GetPath()
 	return path
 end
 
-function Instance:HasChild(name)
+function Instance.HasChild(self: InstanceObject, name: string): boolean
 	return self:FindFirstChild(name) ~= nil
 end
 
-function Instance:CountDescendants()
+function Instance.CountDescendants(self: InstanceObject): number
 	return #self:GetDescendants()
 end
 
-function Instance:DestroyChildren()
+function Instance.DestroyChildren(self: InstanceObject): ()
 	for _, child in ipairs(self:GetChildren()) do
 		child:Destroy()
 	end
 	rawset(self, "_children", {})
 end
 
-function Instance:GetRootParent()
+function Instance.GetRootParent(self: InstanceObject): InstanceObject
 	local root = self
 	while root.Parent do
 		root = root.Parent
@@ -980,7 +1011,7 @@ function Instance:GetRootParent()
 	return root
 end
 
-function Instance:GetDepth()
+function Instance.GetDepth(self: InstanceObject): number
 	local depth = 0
 	local cur = self.Parent
 	while cur do
@@ -990,8 +1021,8 @@ function Instance:GetDepth()
 	return depth
 end
 
-function Instance:QueryDescendants(selector)
-	local function parseSelector(sel)
+function Instance.QueryDescendants(self: InstanceObject, selector: string): { InstanceObject }
+	local function parseSelector(sel: string): { string }
 		local segments = {}
 		local current = ""
 		local depth = 0
@@ -1067,7 +1098,7 @@ function Instance:QueryDescendants(selector)
 		end
 	end
 
-	local function parseSimpleSelector(sel)
+	local function parseSimpleSelector(sel: string): (InstanceObject) -> boolean
 		sel = sel:gsub("^%s+", ""):gsub("%s+$", "")
 
 		return function(inst)
@@ -1138,7 +1169,7 @@ function Instance:QueryDescendants(selector)
 		end
 	end
 
-	local function matchesSelector(inst, sel)
+	local function matchesSelector(inst: InstanceObject, sel: string): boolean
 		sel = sel:gsub("^%s+", ""):gsub("%s+$", "")
 
 		if sel:match(":not%(") then
@@ -1160,7 +1191,7 @@ function Instance:QueryDescendants(selector)
 			if hasContent then
 				local baseSelector = sel:gsub(":has%(.-%)", "")
 				local baseFilter = baseSelector ~= "" and parseSimpleSelector(baseSelector)
-					or function()
+					or function(_instance: InstanceObject): boolean
 						return true
 					end
 
@@ -1172,7 +1203,7 @@ function Instance:QueryDescendants(selector)
 				if hasDirectChild then
 					hasContent = hasContent:sub(2):gsub("^%s+", "")
 					local hasFilter = parseSimpleSelector(hasContent)
-					for _, child in ipairs(rawget(inst, "_children")) do
+					for _, child in ipairs(childrenOf(inst)) do
 						if hasFilter(child) then
 							return true
 						end
@@ -1221,100 +1252,31 @@ function Instance:QueryDescendants(selector)
 	return results
 end
 
-function Instance:SetMetadata(key, value)
+function Instance.SetMetadata(self: InstanceObject, key: string, value: any): ()
 	local meta = rawget(self, "_meta")
 	if not meta then
 		meta = {}
 		rawset(self, "_meta", meta)
 	end
+	assert(meta)
 	meta[key] = value
 end
 
-function Instance:GetMetadata(key)
+function Instance.GetMetadata(self: InstanceObject, key: string): any
 	local meta = rawget(self, "_meta")
 	return meta and meta[key]
 end
 
-function Instance:GetAttribute(name)
+function Instance.GetAttribute(self: InstanceObject, name: string): any
 	return self.attributes[name]
 end
 
-function Instance:EnableHistory(limit)
+function Instance.EnableHistory(self: InstanceObject, limit: number): ()
 	self._history = {}
 	self._historyLimit = limit or 100
 end
 
-function Instance:Destroy()
-	if rawget(self, "Destroyed") then
-		return
-	end
-
-	local destroying = rawget(self, "Destroying")
-	if destroying then
-		destroying:Fire()
-	end
-
-	local children = {}
-	for _, child in ipairs(rawget(self, "_children") or {}) do
-		children[#children + 1] = child
-	end
-
-	local props = rawget(self, "_props")
-	if props and props.Parent then
-		self.Parent = nil
-	end
-
-	rawset(self, "_children", {})
-
-	for _, child in ipairs(children) do
-		child:Destroy()
-	end
-
-	rawset(self, "_props", nil)
-	rawset(self, "Destroyed", true)
-
-	-- Disconnect all signals
-	if rawget(self, "ChildAdded") then
-		self.ChildAdded:Destroy()
-	end
-	if rawget(self, "AncestryChanged") then
-		self.AncestryChanged:Destroy()
-	end
-	if rawget(self, "Changed") then
-		self.Changed:Destroy()
-	end
-	if rawget(self, "ChildRemoved") then
-		self.ChildRemoved:Destroy()
-	end
-	if rawget(self, "DescendantRemoving") then
-		self.DescendantRemoving:Destroy()
-	end
-	if rawget(self, "Destroying") then
-		self.Destroying:Destroy()
-	end
-	if rawget(self, "DescendantAdded") then
-		self.DescendantAdded:Destroy()
-	end
-	if rawget(self, "DescendantChanged") then
-		self.DescendantChanged:Destroy()
-	end
-
-	local propertySignals = rawget(self, "_propertySignals")
-	if propertySignals then
-		for _, signal in pairs(propertySignals) do
-			signal:Destroy()
-		end
-		rawset(self, "_propertySignals", nil)
-	end
-
-	local attributeSignals = rawget(self, "_attributeSignals")
-	if attributeSignals then
-		for _, signal in pairs(attributeSignals) do
-			signal:Destroy()
-		end
-		rawset(self, "_attributeSignals", nil)
-	end
-end
+Instance.Destroy = InstanceLifecycle.Destroy
 
 Instance:SetBarrier("Name", function(new)
 	if type(new) ~= "string" then

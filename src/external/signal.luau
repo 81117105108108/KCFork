@@ -1,4 +1,14 @@
+--!strict
 -- KinemiumSignal.lua
+local task = getfenv(0).task
+type ConnectionState = {
+	Connected: boolean, Priority: number, _signal: SignalState?,
+	_fn: ((...any) -> ())?, [string]: any,
+}
+type SignalState = {
+	_connections: { ConnectionState }?, _queuedFires: { { any } }?,
+	_history: { { any } }?, [string]: any,
+}
 local Signal = { __type = "KinemiumSignal" }
 Signal.__index = Signal
 
@@ -6,16 +16,17 @@ Signal.__index = Signal
 local Connection = { __type = "KinemiumConnection" }
 Connection.__index = Connection
 
-function Connection.new(signal, fn, priority)
-	local self = setmetatable({}, Connection)
+function Connection.new(signal: SignalState, fn: (...any) -> (), priority: number?): ConnectionState
+	local self = {} :: ConnectionState
+	setmetatable(self, Connection)
 	self._signal = signal
 	self._fn = fn
 	self.Connected = true
 	self.Priority = priority or 0
-	return self
+	return (self :: unknown) :: ConnectionState
 end
 
-function Connection:Disconnect()
+function Connection.Disconnect(self: ConnectionState): ()
 	if not self.Connected then
 		return
 	end
@@ -47,11 +58,12 @@ function Connection:SetPriority(priority)
 end
 
 -- signal container
-function Signal.new()
-	local self = setmetatable({}, Signal)
+function Signal.new(): SignalState
+	local self = {} :: SignalState
+	setmetatable(self, Signal)
 	self._paused = false
 	self._debugMode = false
-	return self
+	return (self :: unknown) :: SignalState
 end
 
 function Signal:Connect(fn, priority)
@@ -101,12 +113,11 @@ function Signal:Wait(timeout)
 	return coroutine.yield()
 end
 
-function Signal:Fire(...)
+function Signal.Fire(self: SignalState, ...: any): ()
 	if self._paused then
-		if not self._queuedFires then
-			self._queuedFires = {}
-		end
-		table.insert(self._queuedFires, { ... })
+		local queued = self._queuedFires or {}
+		self._queuedFires = queued
+		table.insert(queued, { ... })
 		return
 	end
 
@@ -146,12 +157,12 @@ function Signal:Fire(...)
 			args = { ... }
 			hasArgs = true
 		end
-		if not self._history then
-			self._history = {}
-		end
-		table.insert(self._history, 1, { os.clock(), args })
-		if #self._history > self._historyLimit then
-			table.remove(self._history)
+		local history = self._history or {}
+		self._history = history
+		local entry: { any } = { os.clock(), args }
+		table.insert(history, 1, entry)
+		if #history > self._historyLimit then
+			table.remove(history)
 		end
 	end
 
@@ -198,7 +209,7 @@ function Signal:Pause()
 	self._paused = true
 end
 
-function Signal:Resume()
+function Signal.Resume(self: SignalState): ()
 	self._paused = false
 	if self._queuedFires then
 		for _, args in ipairs(self._queuedFires) do
@@ -269,7 +280,7 @@ function Signal:SetHistoryLimit(limit)
 	end
 end
 
-function Signal:ClearHistory()
+function Signal.ClearHistory(self: SignalState): ()
 	self._history = nil
 end
 
@@ -277,7 +288,7 @@ function Signal:SetDebugMode(enabled)
 	self._debugMode = enabled
 end
 
-function Signal:DisconnectAll()
+function Signal.DisconnectAll(self: SignalState): ()
 	if self._connections then
 		for i = #self._connections, 1, -1 do
 			self._connections[i]:Disconnect()
@@ -367,7 +378,7 @@ function Signal:Merge(otherSignal)
 	return mergedSignal
 end
 
-function Signal:_sortConnections()
+function Signal._sortConnections(self: SignalState): ()
 	if self._connections then
 		table.sort(self._connections, function(a, b)
 			return a.Priority > b.Priority

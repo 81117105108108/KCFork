@@ -1,4 +1,6 @@
+--!strict
 -- description: "A basic 3D primitive used for physics, collision, and world building."
+local resources = require("../../../engine/ffi/ResourceTracker").shared
 local Vector3 = require("@Vector3")
 local Color3 = require("@Color3")
 local CFrame = require("@CFrame")
@@ -61,18 +63,15 @@ local propTable = {
 local function UpdateManifoldPointer(instance, sizeOverride)
 	local size = sizeOverride or instance.Size
 	if instance.Shape == Enum.PartType.Block then
-		manifold.gen.free(instance._manifoldptr)
 		instance._manifoldptr = manifold.gen.box(size.X, size.Y, size.Z)
 	elseif instance.Shape == Enum.PartType.Ball then
 		local radius = size.X * 0.5
-		manifold.gen.free(instance._manifoldptr)
 		instance._manifoldptr = manifold.gen.sphere(radius, 32)
 	elseif instance.Shape == Enum.PartType.Cylinder then
 		local radius = size.X * 0.5
 		local height = size.Y
 		local segments = 24
 
-		manifold.gen.free(instance._manifoldptr)
 		instance._manifoldptr = manifold.gen.cylinder(radius, height, segments, true, radius)
 	end
 end
@@ -178,7 +177,34 @@ return {
 			-- add support
 		end
 
+		-- All writes, including CSG replacements, transfer native ownership here.
+		instance:SetBarrier("_manifoldptr", function(pointer: any): boolean
+			local props = rawget(instance, "_props")
+			if not props then return false end
+			local previous = props._manifoldptr
+			if pointer == previous then return true end
+			assert(pointer ~= zune.ffi.null, "Manifold allocation failed")
+			if pointer ~= nil then resources:Track(instance, pointer, manifold.gen.free) end
+			props._manifoldptr = pointer
+			if previous ~= nil then resources:Release(instance, previous) end
+			return true
+		end)
 		UpdateManifoldPointer(instance)
+		local cloners = rawget(instance, "_propertyCloners") or {}
+		rawset(instance, "_propertyCloners", cloners)
+		cloners._manifoldptr = function(pointer: any): any
+			local copy = manifold.gen.alloc()
+			assert(copy ~= nil and copy ~= zune.ffi.null, "Manifold allocation failed")
+			local ok, failure = pcall(function()
+				assert(manifold.lib.manifold_copy(copy, pointer) ~= zune.ffi.null, "Manifold copy failed")
+				resources:Track(instance, copy, manifold.gen.free)
+			end)
+			if not ok then
+				manifold.gen.free(copy)
+				error(failure)
+			end
+			return copy
+		end
 		instance:SetBarrier("CFrame", function(value)
 			syncFromCFrame(instance, value)
 			return true
@@ -210,8 +236,6 @@ return {
 
 		instance.Destroying:Connect(function()
 			instance._mesh = nil
-
-			manifold.gen.free(instance._manifoldptr)
 		end)
 
 		return instance
