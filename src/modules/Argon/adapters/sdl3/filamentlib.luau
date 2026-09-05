@@ -3,7 +3,6 @@ local filament = require("./filament")
 local filamentAdapter = {}
 local typedefs = require("../../typedefs")
 
-local filamentPixelsPtr = nil
 local DrawItem = filament.structs.KineFilamentDrawItem
 local DRAW_ITEM_SIZE = DrawItem:size()
 local DRAW_CAST_SHADOWS = 1
@@ -27,7 +26,23 @@ end
 local drawListBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
 local indexBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
 local transformBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
-local drawListVersions: { [any]: { [number]: number } } = setmetatable({}, { __mode = "k" })
+local pixelBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
+local drawListVersions: { [any]: any } = setmetatable({}, { __mode = "k" })
+
+local function releaseBuffer(cache, window)
+	local state = cache[window]
+	if state then
+		zune.ffi.free(state.pointer)
+		cache[window] = nil
+	end
+end
+
+local function invalidateDrawLists(window)
+	local state = drawListVersions[window]
+	if state then
+		table.clear(state.streams)
+	end
+end
 
 assert(DRAW_ITEM_SIZE == 120, "KineFilamentDrawItem ABI mismatch")
 
@@ -59,11 +74,9 @@ local function getDrawListBuffer(window: typedefs.Window, itemCount: number)
 		capacity *= 2
 	end
 
-	if state then
-		zune.ffi.free(state.pointer)
-	end
-
 	local pointer = zune.ffi.alloc(capacity * DRAW_ITEM_SIZE)
+	assert(pointer and pointer ~= zune.ffi.null, "Unable to allocate draw list buffer")
+	releaseBuffer(drawListBuffers, window)
 	drawListBuffers[window] = {
 		pointer = pointer,
 		capacity = capacity,
@@ -83,11 +96,9 @@ local function getRawBuffer(cache, window: typedefs.Window, byteCount: number)
 		capacity *= 2
 	end
 
-	if state then
-		zune.ffi.free(state.pointer)
-	end
-
 	local pointer = zune.ffi.alloc(capacity)
+	assert(pointer and pointer ~= zune.ffi.null, "Unable to allocate rendering buffer")
+	releaseBuffer(cache, window)
 	cache[window] = {
 		pointer = pointer,
 		capacity = capacity,
@@ -139,7 +150,7 @@ local function writeDrawItem(items, packedCount: number, drawCall)
 		rawMatrix = rawMatrix:getraw()
 	end
 
-	if not mesh or not mesh._handle then
+	if not mesh or not mesh._handle or mesh._handle == zune.ffi.null or not drawCall.color then
 		return false
 	end
 
@@ -152,7 +163,8 @@ local function writeDrawItem(items, packedCount: number, drawCall)
 	if drawCall.CastShadow ~= false then
 		flags += DRAW_CAST_SHADOWS
 	end
-	if drawCall.RecieveShadow ~= false then
+	local receiveShadow = if drawCall.ReceiveShadow ~= nil then drawCall.ReceiveShadow else drawCall.RecieveShadow
+	if receiveShadow ~= false then
 		flags += DRAW_RECEIVE_SHADOWS
 	end
 	if drawCall.Culling == true then
@@ -176,7 +188,9 @@ local function writeDrawItem(items, packedCount: number, drawCall)
 end
 
 function filamentAdapter:Init(window: typedefs.Window)
-	filamentPixelsPtr = zune.ffi.alloc(window.Width * window.Height * 4)
+	if window._3dhandle and window._3dhandle ~= zune.ffi.null then
+		return
+	end
 
 	if window.WGI == "vulkan" then
 		window._3dhandle =
@@ -205,6 +219,9 @@ end
 function filamentAdapter:DestroyMaterialShader(shader)
 	if shader and shader ~= zune.ffi.null then
 		filament.lib.Kine_Filament_Shader_Destroy(shader)
+		for window in pairs(drawListVersions) do
+			invalidateDrawLists(window)
+		end
 	end
 end
 
@@ -225,7 +242,10 @@ function filamentAdapter:SetGlobalMaterialShader(window: typedefs.Window, shader
 	if not window or not window._3dhandle or window._3dhandle == zune.ffi.null then
 		return false
 	end
-	return filament.lib.Kine_Filament_SetGlobalShader(window._3dhandle, shader or zune.ffi.null) ~= 0
+	local result = filament.lib.Kine_Filament_SetGlobalShader(window._3dhandle, shader or zune.ffi.null) ~= 0
+	-- Native shader changes destroy retained renderables, including partial rebuilds.
+	invalidateDrawLists(window)
+	return result
 end
 
 function filamentAdapter:GetVulkanCompositor(window: typedefs.Window)
@@ -247,13 +267,12 @@ function filamentAdapter:GetVulkanBackend(window: typedefs.Window, outBackend)
 end
 
 function filamentAdapter:Shutdown(window: typedefs.Window)
-	local drawListBuffer = drawListBuffers[window]
-	if drawListBuffer then
-		zune.ffi.free(drawListBuffer.pointer)
-		drawListBuffers[window] = nil
-	end
+	releaseBuffer(drawListBuffers, window)
+	releaseBuffer(indexBuffers, window)
+	releaseBuffer(transformBuffers, window)
+	releaseBuffer(pixelBuffers, window)
 	drawListVersions[window] = nil
-	if window._3dhandle then
+	if window._3dhandle and window._3dhandle ~= zune.ffi.null then
 		filament.lib.Kine_Filament_Destroy(window._3dhandle)
 		window._3dhandle = nil
 	end
@@ -267,7 +286,12 @@ function filamentAdapter:SetCameraPosition(window: typedefs.Window, position: ty
 	filament.lib.Kine_Filament_SetCameraPosition(handle, position.X, position.Y, position.Z)
 end
 
-function filamentAdapter:SetCameraLookAt(window: typedefs.Window, position: typedefs.Vector3, target: typedefs.Vector3)
+function filamentAdapter:SetCameraLookAt(
+	window: typedefs.Window,
+	position: typedefs.Vector3,
+	target: typedefs.Vector3,
+	up: typedefs.Vector3?
+)
 	if not window._3dhandle or window._3dhandle == zune.ffi.null then
 		return
 	end
@@ -279,9 +303,9 @@ function filamentAdapter:SetCameraLookAt(window: typedefs.Window, position: type
 		target.X,
 		target.Y,
 		target.Z,
-		0,
-		1,
-		0
+		if up then up.X else 0,
+		if up then up.Y else 1,
+		if up then up.Z else 0
 	)
 end
 
@@ -377,13 +401,24 @@ function filamentAdapter:Render3D(window: typedefs.Window, dt: number)
 		return
 	end
 	filament.lib.Kine_Filament_RenderFrame(handle, dt)
+	local state = drawListVersions[window]
+	if state then
+		state.frame += 1
+		-- A stream skipped for a rendered frame may have been evicted natively.
+		for id, stream in pairs(state.streams) do
+			if stream.frame < state.frame - 1 then
+				state.streams[id] = nil
+			end
+		end
+	end
 end
 
 function filamentAdapter:ResizePixelBuffer(window, width, height)
-	if filamentPixelsPtr then
-		zune.ffi.free(filamentPixelsPtr)
+	if width <= 0 or height <= 0 then
+		return
 	end
-	filamentPixelsPtr = zune.ffi.alloc(width * height * 4)
+	-- Readback is allocated lazily by GetPixels; Vulkan never needs it.
+	releaseBuffer(pixelBuffers, window)
 	filamentAdapter:Resize3D(window, width, height)
 end
 
@@ -426,6 +461,7 @@ function filamentAdapter:Destroy3DTexture(window: typedefs.Window, texture: FFIP
 		return
 	end
 	filament.lib.Kine_Filament_DestroyTex(window._3dhandle, texture)
+	invalidateDrawLists(window)
 end
 
 function filamentAdapter:CreateParticleTexture(window: typedefs.Window, image: typedefs.Image)
@@ -562,6 +598,7 @@ function filamentAdapter:DestroyMesh(window: typedefs.Window, mesh: typedefs.Mes
 	end
 	filament.lib.Kine_Filament_DestroyMesh(window._3dhandle, mesh._handle)
 	mesh._handle = nil
+	invalidateDrawLists(window)
 end
 
 function filamentAdapter:UpdateCustomMesh(
@@ -659,21 +696,30 @@ function filamentAdapter:DrawMeshList(
 		return
 	end
 
-	local versioned = streamId ~= nil and version ~= nil
+	local versioned = streamId ~= nil and streamId > 0 and version ~= nil
 	local retainedStreamId = streamId or 0
-	local retainedVersion = version or 0
+	local retainedVersion = 0
+	local state
 	if versioned then
-		local versions = drawListVersions[window]
-		if versions and versions[retainedStreamId] == retainedVersion then
+		state = drawListVersions[window]
+		if not state then
+			state = { frame = 0, revision = 0, streams = {} }
+			drawListVersions[window] = state
+		end
+		local stream = state.streams[retainedStreamId]
+		if stream and stream.version == version then
+			stream.frame = state.frame
 			filament.lib.Kine_Filament_DrawMeshListVersioned(
 				window._3dhandle,
 				zune.ffi.null,
 				0,
 				retainedStreamId,
-				retainedVersion
+				stream.revision
 			)
 			return
 		end
+		state.revision += 1
+		retainedVersion = state.revision
 	end
 
 	local requestedCount = math.min(itemCount or #drawCalls, #drawCalls)
@@ -686,9 +732,7 @@ function filamentAdapter:DrawMeshList(
 				retainedStreamId,
 				retainedVersion
 			)
-			local versions = drawListVersions[window] or {}
-			versions[retainedStreamId] = retainedVersion
-			drawListVersions[window] = versions
+			state.streams[retainedStreamId] = { version = version, revision = retainedVersion, frame = state.frame }
 		end
 		return
 	end
@@ -696,68 +740,9 @@ function filamentAdapter:DrawMeshList(
 	local items = getDrawListBuffer(window, requestedCount)
 	local packedCount = 0
 	for i = 1, requestedCount do
-		local drawCall = drawCalls[i]
-		local mesh = drawCall and drawCall.mesh
-		local rawMatrix = drawCall and drawCall.matrix
-		local cframe = drawCall and drawCall.cframe
-		local scale = drawCall and drawCall.scale
-		if type(rawMatrix) == "table" and rawMatrix.getraw then
-			rawMatrix = rawMatrix:getraw()
+		if writeDrawItem(items, packedCount, drawCalls[i]) then
+			packedCount += 1
 		end
-
-		if not mesh or not mesh._handle or (not rawMatrix and (not cframe or not scale)) then
-			continue
-		end
-
-		local color = drawCall.color
-		local base = packedCount * DRAW_ITEM_SIZE
-		local flags = 0
-		if drawCall.CastShadow ~= false then
-			flags += DRAW_CAST_SHADOWS
-		end
-		if drawCall.RecieveShadow ~= false then
-			flags += DRAW_RECEIVE_SHADOWS
-		end
-		if drawCall.Culling == true then
-			flags += DRAW_CULLING
-		end
-
-		items:writeptr(base + drawItemOffsets.mesh, mesh._handle)
-		items:writeptr(base + drawItemOffsets.tex, drawCall.texture or zune.ffi.null)
-		local transformOffset = base + drawItemOffsets.transform
-		if rawMatrix then
-			items:write(transformOffset, rawMatrix, 0, 16 * 4)
-		else
-			local position = cframe.Position
-			local rotation = cframe.Rotation
-			items:writef32(transformOffset, rotation[1][1] * scale.X)
-			items:writef32(transformOffset + 4, rotation[1][2] * scale.Y)
-			items:writef32(transformOffset + 8, rotation[1][3] * scale.Z)
-			items:writef32(transformOffset + 12, position.X)
-			items:writef32(transformOffset + 16, rotation[2][1] * scale.X)
-			items:writef32(transformOffset + 20, rotation[2][2] * scale.Y)
-			items:writef32(transformOffset + 24, rotation[2][3] * scale.Z)
-			items:writef32(transformOffset + 28, position.Y)
-			items:writef32(transformOffset + 32, rotation[3][1] * scale.X)
-			items:writef32(transformOffset + 36, rotation[3][2] * scale.Y)
-			items:writef32(transformOffset + 40, rotation[3][3] * scale.Z)
-			items:writef32(transformOffset + 44, position.Z)
-			items:writef32(transformOffset + 48, 0)
-			items:writef32(transformOffset + 52, 0)
-			items:writef32(transformOffset + 56, 0)
-			items:writef32(transformOffset + 60, 1)
-		end
-		items:writef32(base + drawItemOffsets.r, color.R)
-		items:writef32(base + drawItemOffsets.g, color.G)
-		items:writef32(base + drawItemOffsets.b, color.B)
-		items:writef32(base + drawItemOffsets.param1, math.clamp(drawCall.roughness or 0.5, 0, 1))
-		items:writef32(base + drawItemOffsets.param2, math.clamp(drawCall.metallic or 0, 0, 1))
-		items:writef32(base + drawItemOffsets.param3, drawCall.MaterialTileScale or 1)
-		items:writef32(base + drawItemOffsets.transmission, drawCall.transmission or 0)
-		items:writei32(base + drawItemOffsets.materialKind, drawCall.MaterialKind or 0)
-		items:writeu32(base + drawItemOffsets.flags, flags)
-		items:writeu32(base + drawItemOffsets.reserved, 0)
-		packedCount += 1
 	end
 
 	if versioned then
@@ -768,9 +753,7 @@ function filamentAdapter:DrawMeshList(
 			retainedStreamId,
 			retainedVersion
 		)
-		local versions = drawListVersions[window] or {}
-		versions[retainedStreamId] = retainedVersion
-		drawListVersions[window] = versions
+		state.streams[retainedStreamId] = { version = version, revision = retainedVersion, frame = state.frame }
 	elseif packedCount > 0 then
 		filament.lib.Kine_Filament_DrawMeshList(window._3dhandle, items, packedCount)
 	end
@@ -791,6 +774,9 @@ function filamentAdapter:CreateInstanceBatch(window: typedefs.Window, drawCalls:
 	for i = 1, requestedCount do
 		if writeDrawItem(items, packedCount, drawCalls[i]) then
 			packedCount += 1
+		else
+			-- Instance update indices refer to the original array; never compact it.
+			return nil
 		end
 	end
 	if packedCount <= 0 then
@@ -831,7 +817,8 @@ function filamentAdapter:UpdateInstanceTransforms(
 	local dirtyCount = 0
 	for i = 1, requestedCount do
 		local update = updates[i]
-		if update then
+		if update and type(update.index) == "number" and update.index >= 0
+			and update.index < 4294967296 and update.index % 1 == 0 then
 			local rawMatrix = update.matrix
 			if type(rawMatrix) == "table" and rawMatrix.getraw then
 				rawMatrix = rawMatrix:getraw()
@@ -1502,14 +1489,13 @@ function filamentAdapter:SetPostProcessingPreset(window: typedefs.Window, preset
 end
 
 function filamentAdapter:GetPixels(window: typedefs.Window)
-	if window.WGI == "vulkan" then
+	if window.WGI == "vulkan" or not window._3dhandle or window._3dhandle == zune.ffi.null
+		or window.Width <= 0 or window.Height <= 0 then
 		return nil
 	end
-	if not filamentPixelsPtr then
-		filamentPixelsPtr = zune.ffi.alloc(window.Width * window.Height * 4)
-	end
-	filament.lib.Kine_Filament_ReadPixels(window._3dhandle, filamentPixelsPtr)
-	return filamentPixelsPtr
+	local pixels = getRawBuffer(pixelBuffers, window, window.Width * window.Height * 4)
+	filament.lib.Kine_Filament_ReadPixels(window._3dhandle, pixels)
+	return pixels
 end
 
 return filamentAdapter

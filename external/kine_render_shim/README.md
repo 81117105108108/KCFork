@@ -35,8 +35,8 @@ print(lib.Kine_GetVersion())
 
 ## Filament integration (`kine_filament_shim`)
 
-The optional `kine_filament_shim` target bridges Google Filament into an
-existing OpenGL host context. It keeps Filament C++ objects (`Engine`, `Scene`,
+The `kine_filament_shim` target bridges Google Filament into the Vulkan compositor
+or an existing OpenGL host context. It keeps Filament C++ objects (`Engine`, `Scene`,
 `View`, `Camera`, ...) behind opaque handles so Luau never touches C++ object
 layouts.
 
@@ -65,3 +65,45 @@ cmake --build . --target kine_filament_shim --config Release
 If `FILAMENT_DIR` is not provided, the CMake file downloads the matching
 prebuilt Filament SDK and uses its `matc`/`resgen` tools to compile embedded
 materials.
+
+The standalone shim configuration defaults to `KINE_WITH_FILAMENT=ON` and
+`KINE_FILAMENT_BACKEND=VULKAN`; Vulkan builds require the Vulkan SDK.
+For an OpenGL compatibility build, explicitly select
+`-DKINE_FILAMENT_BACKEND=OPENGL`. The OpenGL texture import example above applies
+to that backend. Vulkan readback is disabled by default; enabling it is a debugging
+option, not the normal presentation path.
+
+## Engine build and regression tests
+
+The full engine uses `external/CMakeLists.txt`, which combines the native
+dependencies into `KinemiumLibs` and selects the unified Vulkan path. Populate
+the repository's submodules before configuring:
+
+```powershell
+git submodule update --init --recursive
+cmake -S external -B external/build -A x64
+cmake --build external/build --config Release
+```
+
+These commands run from the repository root on Windows with Visual Studio and
+the Vulkan SDK installed. On other platforms, omit `-A x64` and use the
+appropriate CMake generator. Configuration downloads dependencies that are not
+already available; the complete build includes Skia and other native libraries.
+Use an existing configured build tree when one is available.
+
+CPU regression tests can run without those dependencies:
+
+```powershell
+zune run tests/rendering.luau
+python tests/rendering_native.py
+```
+
+The second command requires a C++20 compiler (a Visual Studio developer shell on
+Windows, or `CXX` pointing to a configured compiler). It compiles actual batching
+functions with graphics test doubles, so passing it does not establish that a
+full Filament build or GPU rendering works. Changes to the native shim require
+rebuilding the runtime native library; Luau-only changes do not update a DLL.
+
+See [rendering architecture and validation](../../docs/rendering.md) for frame
+ordering, camera behavior, draw-list versions, instance indices, FFI layout,
+buffer ownership, profiling limits, and the visual integration checklist.

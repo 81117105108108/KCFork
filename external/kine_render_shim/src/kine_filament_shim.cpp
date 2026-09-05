@@ -337,6 +337,7 @@ struct KineFilamentInstanceBatch {
     MaterialInstance* matInst = nullptr;
     std::vector<math::mat4f> transforms;
     std::vector<KineBuiltBatch> chunks;
+    std::vector<uint32_t> dirtyIndices;
 };
 
 struct KineRetainedListState {
@@ -4368,6 +4369,14 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
             auto built = ctx->builtBatches.find(key);
             if (built != ctx->builtBatches.end()) {
                 built->second.lastUsedFrame = ctx->batchFrame;
+            } else {
+                // Retry retained uploads after a skipped compositor frame or
+                // a shader rebuild. No Luau repacking is needed while pending
+                // transforms are still available.
+                auto pending = ctx->pendingBatches.find(key);
+                if (pending != ctx->pendingBatches.end()) {
+                    pending->second.lastQueuedFrame = ctx->batchFrame;
+                }
             }
         }
         return;
@@ -4458,7 +4467,8 @@ KINE_API void Kine_Filament_UpdateInstanceTransforms(
     size_t maxInstances = batch->ctx->engine->getMaxAutomaticInstances();
     if (maxInstances == 0) maxInstances = 1;
 
-    std::vector<uint32_t> dirtyIndices;
+    auto& dirtyIndices = batch->dirtyIndices;
+    dirtyIndices.clear();
     dirtyIndices.reserve(dirtyCount);
 
     for (uint32_t i = 0; i < dirtyCount; ++i) {
@@ -4481,6 +4491,7 @@ KINE_API void Kine_Filament_UpdateInstanceTransforms(
     dirtyIndices.erase(std::unique(dirtyIndices.begin(), dirtyIndices.end()), dirtyIndices.end());
 
     size_t pos = 0;
+    size_t boundsChunk = batch->chunks.size();
     while (pos < dirtyIndices.size()) {
         const uint32_t first = dirtyIndices[pos];
         const size_t chunkIndex = first / maxInstances;
@@ -4506,6 +4517,20 @@ KINE_API void Kine_Filament_UpdateInstanceTransforms(
             batch->transforms.data() + first,
             count,
             first - chunkBase);
+
+        // All CPU transforms were updated before this loop. Recompute each
+        // touched chunk once, including unchanged instances in the union, so
+        // moving objects cannot leave their original camera/shadow bounds.
+        if (boundsChunk != chunkIndex) {
+            boundsChunk = chunkIndex;
+            RenderableManager& rm = batch->ctx->engine->getRenderableManager();
+            const auto renderable = rm.getInstance(chunk.entity);
+            if (renderable.isValid()) {
+                rm.setAxisAlignedBoundingBox(renderable,
+                    kine_compute_dynamic_batch_bounds(batch->key.mesh,
+                        batch->transforms.data() + chunkBase, chunk.instanceCount));
+            }
+        }
     }
 }
 
