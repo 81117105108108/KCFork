@@ -24,6 +24,9 @@ KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader* shader);
 KINE_API bool Kine_Filament_Shader_SetUniform(
     KineFilamentShader* shader, const char* name, const float* values, int valueCount);
 KINE_API bool Kine_Filament_SetGlobalShader(KineFilamentContext* ctx, KineFilamentShader* shader);
+/* Applies a surface-domain Filamat material as a fullscreen pass. The material
+   must declare a sampler2d parameter named inputTexture. */
+KINE_API bool Kine_Filament_SetPostProcessShader(KineFilamentContext* ctx, KineFilamentShader* shader);
 KINE_API const char* Kine_Filament_Shader_GetLastError(void);
 
 #define KINE_FILAMENT_DRAW_CAST_SHADOWS    (1u << 0)
@@ -46,6 +49,7 @@ typedef struct KineFilamentDrawItem {
     int32_t materialKind;
     uint32_t flags;
     uint32_t reserved;
+    KineFilamentShader* shader;
 } KineFilamentDrawItem;
 
 typedef struct KineFilamentParticleItem {
@@ -269,7 +273,7 @@ KINE_API void Kine_Filament_SetCameraPerspective(
 KINE_API void Kine_Filament_SetCameraPosition(KineFilamentContext* ctx, float x, float y, float z);
 KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext* ctx, float dx, float dy, float dz);
 
-// shape: 1 = cube, 2 = sphere, 3 = pyramid, 4 = quad,
+// shape: 1 = cube, 2 = sphere, 3 = pyramid, 4 = quad, 6 = cylinder,
 //        10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
 KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, int shape);
 KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromPath(KineFilamentContext* ctx, const char* path);
@@ -456,6 +460,15 @@ KINE_API int  Kine_Filament_CreateLight(
     float cr, float cg, float cb,
     float intensity, float falloff);
 
+KINE_API int Kine_Filament_CreateLightEx(
+    KineFilamentContext* ctx, int lightType,
+    float px, float py, float pz,
+    float dx, float dy, float dz,
+    float cr, float cg, float cb,
+    float intensity, float falloff,
+    float innerConeRadians, float outerConeRadians,
+    bool castShadows, bool enabled);
+
 KINE_API void Kine_Filament_SetColorLight(
     KineFilamentContext* ctx, int light, float r, float g, float b);
 KINE_API void Kine_Filament_SetIntensityLight(
@@ -464,6 +477,15 @@ KINE_API void Kine_Filament_SetFalloffLight(
     KineFilamentContext* ctx, int light, float falloff);
 KINE_API void Kine_Filament_SetPositionLight(
     KineFilamentContext* ctx, int light, float x, float y, float z);
+KINE_API void Kine_Filament_SetDirectionLight(
+    KineFilamentContext* ctx, int light, float x, float y, float z);
+KINE_API void Kine_Filament_SetConeLight(
+    KineFilamentContext* ctx, int light, float innerRadians, float outerRadians);
+KINE_API void Kine_Filament_SetShadowLight(
+    KineFilamentContext* ctx, int light, bool castShadows);
+KINE_API void Kine_Filament_SetEnabledLight(
+    KineFilamentContext* ctx, int light, bool enabled);
+KINE_API void Kine_Filament_RemoveLight(KineFilamentContext* ctx, int light);
 
 // ---------------------------------------------------------------------------
 // Screen-space decal management.

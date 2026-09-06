@@ -20,6 +20,10 @@ export type Decal = {
 	_handle: any,
 }
 
+export type Light = {
+	_handle: number,
+}
+
 export type Texture = {
 	_handle: any,
 }

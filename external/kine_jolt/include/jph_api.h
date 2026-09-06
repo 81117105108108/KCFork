@@ -272,6 +272,7 @@ JPH_API JPH_ObjectVsBroadPhaseLayerFilterRef JPH_ObjectVsBroadPhaseLayerFilterTa
 
 JPH_API JPH_ShapeRef JPH_BoxShape_Create(const JPH_Vec3* halfExtent, float convexRadius);
 JPH_API JPH_ShapeRef JPH_SphereShape_Create(float radius);
+JPH_API JPH_ShapeRef JPH_CylinderShape_Create(float halfHeight, float radius, float convexRadius);
 JPH_API JPH_ShapeRef JPH_ConvexHullShape_Create(
     const JPH_Vec3* points,
     uint32_t pointCount,

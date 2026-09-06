@@ -1,230 +1,253 @@
--- description: "Plays audio files with various playback options."
+-- description: "Plays positional or non-positional audio through miniaudio."
 local Signal = require("@Kinemium.signal")
 local Enum = require("@EnumMap")
 local Vector3 = require("@Vector3")
-local adapter = require("@RaylibAdapter")
+local MiniAudio = require("@MiniAudio")
 local zembed = require("@zembed")
 local task = zune.task
 
+local audio = MiniAudio.lib
+
 local propTable = {
-	SoundId = "./src/assets/sounds/bqqchickenalert.mp3",
-	Volume = 1.0,
-	Pitch = 1.0,
+	SoundId = "",
+	Volume = 1,
+	Pitch = 1,
 	Looped = false,
 	Playing = false,
 	TimePosition = 0,
+	TimeLength = 0,
 	PlayOnRemove = false,
 	IsLoaded = false,
 	Name = "Sound",
-	Ended = Signal.new(),
-	AudioBackend = Enum.AudioBackend.RAUDIO,
-
+	AudioBackend = Enum.AudioBackend.MiniAudio,
 	IsStream = false,
 	SoundGroup = nil,
-	_effectiveVolume = 1.0,
-	_fadeVolume = 1.0,
-
+	_effectiveVolume = 1,
+	_fadeVolume = 1,
 	Position = Vector3.new(0, 0, 0),
 	Velocity = Vector3.new(0, 0, 0),
 	Direction = Vector3.new(0, 0, -1),
 	Up = Vector3.new(0, 1, 0),
-	MinDistance = 10.0,
-	MaxDistance = 1000.0,
-	RollOffMode = 0, -- 0 = Linear, 1 = Inverse, 2 = InverseTapered
+	MinDistance = 10,
+	MaxDistance = 1000,
+	RollOffMode = 1,
 	Is3D = false,
 }
 
+local function dbToLinear(db)
+	if db <= -80 then
+		return 0
+	end
+	return 10 ^ (db / 20)
+end
+
+local function childOfClass(instance, className)
+	for _, child in ipairs(instance:GetChildren()) do
+		if child.ClassName == className then
+			return child
+		end
+	end
+	return nil
+end
+
 return {
 	class = "Sound",
-	callback = function(instance, renderer)
+	callback = function(instance)
 		instance:SetProperties(propTable)
-		print("Created sound")
+		instance.Played = Signal.new()
+		instance.Ended = Signal.new()
+		local sound = nil
+		local fadeGeneration = 0
 
-		print(2)
 		local function updateVolume()
-			if not instance.IsLoaded then
-				return
-			end
-			local groupVol = instance.SoundGroup and instance.SoundGroup.Volume or 1.0
-			instance._effectiveVolume = instance.Volume * groupVol * instance._fadeVolume
-			if instance.IsStream then
-				adapter.lib.SetMusicVolume(instance._raylibSound, instance._effectiveVolume)
-			else
-				adapter.lib.SetSoundVolume(instance._raylibSound, instance._effectiveVolume)
-			end
+			if not sound then return end
+			local groupVolume = instance.SoundGroup and instance.SoundGroup.Volume or 1
+			instance._effectiveVolume = instance.Volume * groupVolume * instance._fadeVolume
+			audio.Kine_Audio_SetVolume(sound, instance._effectiveVolume)
 		end
 
-		local function updatePitch()
-			if not instance.IsLoaded then
-				return
+		local function updatePlaybackProperties()
+			if not sound then return end
+			audio.Kine_Audio_SetPitch(sound, instance.Pitch)
+			audio.Kine_Audio_SetLooping(sound, instance.Looped and 1 or 0)
+			audio.Kine_Audio_SetSpatial(sound, instance.Is3D and 1 or 0)
+			audio.Kine_Audio_SetDistance(sound, instance.MinDistance, instance.MaxDistance, instance.RollOffMode)
+			audio.Kine_Audio_SetPosition(sound, instance.Position.X, instance.Position.Y, instance.Position.Z)
+			audio.Kine_Audio_SetVelocity(sound, instance.Velocity.X, instance.Velocity.Y, instance.Velocity.Z)
+			audio.Kine_Audio_SetDirection(sound, instance.Direction.X, instance.Direction.Y, instance.Direction.Z)
+	end
+
+		function instance:_ApplyAudioEffects()
+			if not sound then return end
+			local effect = childOfClass(self, "ReverbSoundEffect")
+			audio.Kine_Audio_SetEffect(sound, 0, effect and effect.Enabled and 1 or 0,
+				effect and math.clamp(effect.DecayTime / 20, 0, 1) or 0.075,
+				effect and 1 - math.clamp(effect.Diffusion, 0, 1) or 0,
+				effect and dbToLinear(effect.WetLevel) or 0,
+				effect and dbToLinear(effect.DryLevel) or 1,
+				effect and math.clamp(effect.Density, 0, 1) or 1)
+
+			effect = childOfClass(self, "EchoSoundEffect")
+			audio.Kine_Audio_SetEffect(sound, 1, effect and effect.Enabled and 1 or 0,
+				effect and effect.Delay or 0.25,
+				effect and effect.Feedback or 0.25,
+				effect and dbToLinear(effect.WetLevel) or 0,
+				effect and dbToLinear(effect.DryLevel) or 1, 0)
+
+			effect = childOfClass(self, "EqualizerSoundEffect")
+			audio.Kine_Audio_SetEffect(sound, 2, effect and effect.Enabled and 1 or 0,
+				effect and effect.LowGain or 0,
+				effect and effect.MidGain or 0,
+				effect and effect.HighGain or 0, 0, 0)
+
+			effect = childOfClass(self, "LowPassSoundEffect")
+			audio.Kine_Audio_SetEffect(sound, 3, effect and effect.Enabled and 1 or 0,
+				effect and effect.CutoffFrequency or 5000, 0, 0, 0, 0)
+
+			effect = childOfClass(self, "HighPassSoundEffect")
+			audio.Kine_Audio_SetEffect(sound, 4, effect and effect.Enabled and 1 or 0,
+				effect and effect.CutoffFrequency or 100, 0, 0, 0, 0)
+		end
+
+		local function unloadAudio(preservePlaying)
+			if sound then
+				audio.Kine_Audio_DestroySound(sound)
+				sound = nil
+				instance._audioSound = nil
 			end
-			if instance.IsStream then
-				adapter.lib.SetMusicPitch(instance._raylibSound, instance.Pitch)
-			else
-				adapter.lib.SetSoundPitch(instance._raylibSound, instance.Pitch)
+			instance.IsLoaded = false
+			if not preservePlaying then
+				instance.Playing = false
 			end
 		end
 
 		local function loadAudio()
-			if instance._raylibSound then
-				if instance.IsStream then
-					adapter.lib.UnloadMusicStream(instance._raylibSound)
-				else
-					adapter.lib.UnloadSound(instance._raylibSound)
-				end
-				instance._raylibSound = nil
-			end
-
+			local shouldPlay = instance.Playing
+			unloadAudio(true)
 			if instance.SoundId == "" then
-				instance.IsLoaded = false
+				instance.Playing = false
 				return
 			end
-
-			local soundPath = instance.SoundId
-			if instance.IsStream then
-				instance._raylibSound = adapter.lib.LoadMusicStream(soundPath)
-				instance.IsLoaded = instance._raylibSound ~= nil
-			else
-				instance._raylibSound = adapter.lib.LoadSound(soundPath)
-				instance.IsLoaded = instance._raylibSound ~= nil
+			local path = zembed.AssetPath(instance.SoundId)
+			sound = MiniAudio.LoadSound(path, instance.IsStream)
+			if MiniAudio.IsNull(sound) then
+				sound = nil
+				warn("[MiniAudio] Failed to load " .. tostring(instance.SoundId))
+				return
 			end
-
-			if instance.IsLoaded then
-				updateVolume()
-				updatePitch()
-			else
-				warn("Failed to load sound/stream: " .. instance.SoundId)
+			instance._audioSound = sound
+			instance.IsLoaded = true
+			instance.TimeLength = audio.Kine_Audio_GetDuration(sound)
+			updateVolume()
+			updatePlaybackProperties()
+			instance:_ApplyAudioEffects()
+			if shouldPlay then
+				audio.Kine_Audio_Play(sound)
 			end
 		end
 
-		local function fadeTo(targetFade, duration)
-			if duration and duration > 0 then
-				local startFade = instance._fadeVolume
-				local startTime = os.clock()
-				task.spawn(function()
-					while true do
-						local elapsed = os.clock() - startTime
-						if elapsed >= duration then
-							instance._fadeVolume = targetFade
-							updateVolume()
-							break
-						end
-						instance._fadeVolume = startFade + (targetFade - startFade) * (elapsed / duration)
-						updateVolume()
-						task.wait()
+		local function fadeTo(target, duration, completed)
+			fadeGeneration += 1
+			local generation = fadeGeneration
+			if not duration or duration <= 0 then
+				instance._fadeVolume = target
+				updateVolume()
+				if completed then completed() end
+				return
+			end
+			local start, startedAt = instance._fadeVolume, os.clock()
+			task.spawn(function()
+				while generation == fadeGeneration and sound do
+					local alpha = math.min(1, (os.clock() - startedAt) / duration)
+					instance._fadeVolume = start + (target - start) * alpha
+					updateVolume()
+					if alpha >= 1 then
+						if completed then completed() end
+						break
 					end
-				end)
-			else
-				instance._fadeVolume = targetFade
-				updateVolume()
-			end
+					task.wait()
+				end
+			end)
 		end
-
-		-- description: "Plays the audio with an optional fade duration."
-		-- args: "self: table, fadeDuration: number"
 
 		function instance:Play(fadeDuration)
-			if self.IsLoaded and not self.Playing then
-				fadeTo(1.0, fadeDuration)
-				if self.IsStream then
-					adapter.lib.PlayMusicStream(self._raylibSound)
-				else
-					adapter.lib.PlaySound(self._raylibSound)
-				end
-				self.Playing = true
-				if self.Played then
-					self.Played:Fire()
-				end
-			end
+			if not sound then return false end
+			if audio.Kine_Audio_IsAtEnd(sound) ~= 0 then audio.Kine_Audio_Seek(sound, 0) end
+			fadeTo(1, fadeDuration)
+			local played = audio.Kine_Audio_Play(sound) ~= 0
+			self.Playing = played
+			self._endedFired = false
+			if played then self.Played:Fire() end
+			return played
 		end
 
-		-- description: "Stops the audio with an optional fade duration."
-		-- args: "self: table, fadeDuration: number"
 		function instance:Stop(fadeDuration)
-			if self.IsLoaded then
-				if fadeDuration and fadeDuration > 0 then
-					fadeTo(0.0, fadeDuration)
-					task.delay(fadeDuration, function()
-						if self.Playing then
-							if self.IsStream then
-								adapter.lib.StopMusicStream(self._raylibSound)
-							else
-								adapter.lib.StopSound(self._raylibSound)
-							end
-							self.Playing = false
-							self.TimePosition = 0
-						end
-					end)
-				else
-					if self.IsStream then
-						adapter.lib.StopMusicStream(self._raylibSound)
-					else
-						adapter.lib.StopSound(self._raylibSound)
-					end
-					self.Playing = false
-					self.TimePosition = 0
-				end
-			end
+			if not sound then return end
+			fadeTo(0, fadeDuration, function()
+				audio.Kine_Audio_Stop(sound)
+				self.Playing = false
+				rawget(self, "_props").TimePosition = 0
+			end)
 		end
 
-		-- description: "Pauses the audio with an optional fade duration."
-		-- args: "self: table, fadeDuration: number"
 		function instance:Pause(fadeDuration)
-			if self.IsLoaded then
-				if fadeDuration and fadeDuration > 0 then
-					fadeTo(0.0, fadeDuration)
-					task.delay(fadeDuration, function()
-						if self.IsStream then
-							adapter.lib.PauseMusicStream(self._raylibSound)
-						else
-							adapter.lib.PauseSound(self._raylibSound)
-						end
-						self.Playing = false
-					end)
-				else
-					if self.IsStream then
-						adapter.lib.PauseMusicStream(self._raylibSound)
-					else
-						adapter.lib.PauseSound(self._raylibSound)
-					end
-					self.Playing = false
-				end
-			end
+			if not sound then return end
+			fadeTo(0, fadeDuration, function()
+				audio.Kine_Audio_Pause(sound)
+				self.Playing = false
+			end)
 		end
 
-		-- description: "Resumes the audio."
-		-- args: "self: table, fadeDuration: number"
 		function instance:Resume(fadeDuration)
-			if self.IsLoaded then
-				if self.IsStream then
-					adapter.lib.ResumeMusicStream(self._raylibSound)
-				else
-					adapter.lib.ResumeSound(self._raylibSound)
+			if not sound then return false end
+			local played = audio.Kine_Audio_Play(sound) ~= 0
+			self.Playing = played
+			fadeTo(1, fadeDuration)
+			return played
+		end
+
+		function instance:_SyncAudio(position)
+			if not sound then return end
+			if position then
+				audio.Kine_Audio_SetPosition(sound, position.X, position.Y, position.Z)
+			end
+			rawget(self, "_props").TimePosition = audio.Kine_Audio_GetTime(sound)
+			if self.Playing and not self.Looped and audio.Kine_Audio_IsAtEnd(sound) ~= 0 then
+				self.Playing = false
+				if not self._endedFired then
+					self._endedFired = true
+					self.Ended:Fire()
 				end
-				self.Playing = true
-				fadeTo(1.0, fadeDuration)
 			end
 		end
 
-		instance.Changed:Connect(function(prop)
-			if prop == "Volume" or prop == "SoundGroup" then
+		instance.Changed:Connect(function(property)
+			if property == "Volume" or property == "SoundGroup" then
 				updateVolume()
-			elseif prop == "Pitch" then
-				updatePitch()
-			elseif prop == "SoundId" or prop == "IsStream" then
+			elseif property == "Playing" and sound then
+				if instance.Playing then
+					audio.Kine_Audio_Play(sound)
+				else
+					audio.Kine_Audio_Pause(sound)
+				end
+			elseif property == "Pitch" or property == "Looped" or property == "Is3D"
+				or property == "Position" or property == "Velocity" or property == "Direction"
+				or property == "MinDistance" or property == "MaxDistance" or property == "RollOffMode"
+			then
+				updatePlaybackProperties()
+			elseif property == "TimePosition" and sound then
+				audio.Kine_Audio_Seek(sound, instance.TimePosition)
+			elseif property == "SoundId" or property == "IsStream" then
 				loadAudio()
 			end
 		end)
-
-		instance.Played = Signal.new()
-		instance.Ended = Signal.new()
-
+		instance.ChildAdded:Connect(function() instance:_ApplyAudioEffects() end)
+		instance.ChildRemoved:Connect(function() instance:_ApplyAudioEffects() end)
+		instance.Destroying:Connect(function() unloadAudio(false) end)
+		loadAudio()
 		return instance
 	end,
-
-	inherit = function(tble)
-		for prop, val in pairs(propTable) do
-			tble[prop] = val
-		end
+	inherit = function(target)
+		for property, value in pairs(propTable) do target[property] = value end
 	end,
 }

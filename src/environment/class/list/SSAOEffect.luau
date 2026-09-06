@@ -15,27 +15,18 @@ return {
 	class = "SSAOEffect",
 
 	callback = function(instance, renderer)
-		local r3d = require("@r3d")
 		local Argon = require("@Argon")
 
 		instance:SetProperties(propTable)
-
-		local envssao = r3d.structs.R3D_EnvSSAO:new({
-			sampleCount = instance.SampleCount,
-			intensity = instance.Intensity,
-			power = instance.Power,
-			radius = instance.Radius,
-			bias = instance.Bias,
-			enabled = instance.Enabled and 1 or 0,
-		})
-		instance:SetMetadata("EffectObject", envssao)
 
 		local function applyFilament()
 			if not renderer or not renderer.Window then
 				return
 			end
 			local active = instance.Enabled and instance.Parent ~= nil and instance.Parent:IsA("Lighting")
-			local quality = if instance.SampleCount <= 8 then "low" else if instance.SampleCount <= 16 then "medium" else "high"
+			local quality = if instance.SampleCount <= 8
+				then "low"
+				else if instance.SampleCount <= 16 then "medium" else "high"
 			Argon:SetAmbientOcclusion(renderer.Window, active, {
 				Type = instance.Type,
 				Quality = quality,
@@ -46,18 +37,6 @@ return {
 		end
 
 		instance.Changed:Connect(function(property, value)
-			if property == "_r3deffect" then
-				return
-			end
-			envssao = r3d.structs.R3D_EnvSSAO:new({
-				sampleCount = instance.SampleCount,
-				intensity = instance.Intensity,
-				power = instance.Power,
-				radius = instance.Radius,
-				bias = instance.Bias,
-				enabled = instance.Enabled and 1 or 0,
-			})
-			instance:SetMetadata("EffectObject", envssao)
 			applyFilament()
 		end)
 		instance.AncestryChanged:Connect(applyFilament)

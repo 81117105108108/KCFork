@@ -134,6 +134,7 @@ local function createPartOperationResult(className, primaryPart, operandParts, w
 	local result = Registry.new(className, serviceRenderer, serviceDatamodel)
 	result:SetProperty("_mesh", gpuMesh)
 	result:SetProperty("_cpuMeshData", meshData)
+	result:SetProperty("_meshUsesPartSize", false)
 	result.CFrame = primaryPart.CFrame
 	result.Size = primaryPart.Size
 	result.ConnectedParts = operandParts
@@ -151,6 +152,7 @@ local function createMeshPartResult(primaryPart, localCFrame, worldManifold, opt
 	local meshPart = Registry.new("MeshPart", serviceRenderer, serviceDatamodel)
 	meshPart:SetProperty("_mesh", gpuMesh)
 	meshPart:SetProperty("_cpuMeshData", meshData)
+	meshPart:SetProperty("_meshUsesPartSize", false)
 	meshPart.CFrame = localCFrame
 	meshPart.Size = primaryPart.Size
 	applyCsgOptions(meshPart, primaryPart, options)

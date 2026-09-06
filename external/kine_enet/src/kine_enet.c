@@ -122,8 +122,26 @@ int Kine_ENet_Peer_Send(
     size_t size,
     int reliable)
 {
+    return Kine_ENet_Peer_SendEx(
+        peer,
+        channel,
+        data,
+        size,
+        reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
+}
+
+int Kine_ENet_Peer_SendEx(
+    void* peer,
+    uint8_t channel,
+    const void* data,
+    size_t size,
+    uint32_t packetFlags)
+{
     ENetPacket* packet;
-    enet_uint32 flags = reliable ? ENET_PACKET_FLAG_RELIABLE : 0;
+    const enet_uint32 allowedFlags = ENET_PACKET_FLAG_RELIABLE |
+        ENET_PACKET_FLAG_UNSEQUENCED |
+        ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT;
+    enet_uint32 flags = packetFlags & allowedFlags;
     if (!peer || (!data && size > 0)) {
         return 0;
     }

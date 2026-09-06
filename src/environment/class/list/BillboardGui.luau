@@ -48,6 +48,8 @@ return {
 		end
 
 		local surface, texture, decal
+		local contentDirty = true
+		local connections = {}
 		local canvasWidth, canvasHeight, worldWidth, worldHeight = 0, 0, 1, 1
 		local function desiredSize()
 			local pps = math.max(1, instance.PixelsPerStud or 50)
@@ -76,6 +78,7 @@ return {
 				return decal ~= nil
 			end
 			destroyResources()
+			contentDirty = true
 			canvasWidth, canvasHeight = width, height
 			instance.RenderOffset = Vector2.new(0, 0)
 			instance.AbsolutePosition, instance.AbsoluteSize = Vector2.new(0, 0), Vector2.new(width, height)
@@ -93,6 +96,9 @@ return {
 			if not instance.Enabled or not ensureResources() then
 				return
 			end
+			if not contentDirty then
+				return
+			end
 			argon:Clear2D(surface, { R = 0, G = 0, B = 0, A = 0 })
 			for _, child in ipairs(instance:GetChildren()) do
 				if child.render then
@@ -100,6 +106,7 @@ return {
 				end
 			end
 			argon:UpdateSurface3DTexture(renderer.Window, texture, surface)
+			contentDirty = false
 		end)
 		local render3dId = renderer.Pool.new("3d", function()
 			if not instance.Enabled or not ensureResources() then
@@ -133,9 +140,24 @@ return {
 			)
 			argon:SetDecalTiling(renderer.Window, decal, worldWidth, worldHeight, 0, 0, 0, 0)
 		end)
+		table.insert(connections, instance.Changed:Connect(function(property)
+			if property == "Size" or property == "PixelsPerStud" or property == "Enabled" then
+				contentDirty = true
+			end
+		end))
+		table.insert(connections, instance.DescendantAdded:Connect(function()
+			contentDirty = true
+		end))
+		table.insert(connections, instance.DescendantRemoving:Connect(function()
+			contentDirty = true
+		end))
+		table.insert(connections, instance.DescendantChanged:Connect(function()
+			contentDirty = true
+		end))
 		instance.Destroying:Connect(function()
 			renderer.Pool.Destroy(render2dId)
 			renderer.Pool.Destroy(render3dId)
+			for _, connection in ipairs(connections) do connection:Disconnect() end
 			destroyResources()
 		end)
 		return instance

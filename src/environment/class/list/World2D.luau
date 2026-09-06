@@ -193,6 +193,12 @@ return {
 			if not instance.Enabled then
 				return
 			end
+			-- Studio owns the edit-mode canvas. Runtime worlds continue to render in
+			-- client/server play sessions, while the viewport editor draws them with
+			-- its own pan/zoom camera and selection overlays.
+			if renderer.Dimension == "2D" and not _G.IsClient and not _G.IsServer then
+				return
+			end
 
 			local canvas = renderer.Window
 			local viewport = viewportSize()

@@ -35,6 +35,18 @@ local PropertyCategories = {
 	BottomRightRadius = "Appearance",
 	TopLeftRadius = "Appearance",
 	TopRightRadius = "Appearance",
+	MeshId = "Appearance",
+	TextureID = "Appearance",
+	TextureId = "Appearance",
+
+	CurveType = "Path",
+	Closed = "Path",
+	LengthSamples = "Path",
+	ClosestPointSamples = "Path",
+	TangentIn = "Path",
+	TangentOut = "Path",
+	Order = "Path",
+	UpVector = "Path",
 
 	ScrollBarTransparency = "Appearance",
 	ScrollBarColor3 = "Appearance",

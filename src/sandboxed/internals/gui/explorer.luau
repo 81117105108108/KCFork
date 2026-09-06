@@ -22,6 +22,15 @@ Explorer.Size = theme.ExplorerCoordinates.Size
 Explorer.Position = theme.ExplorerCoordinates.Position
 Explorer.Parent = game.CoreGui:FindFirstChild("Studio")
 Explorer.BackgroundTransparency = 1
+local visible = true
+
+if ishared.StudioSystem then
+	ishared.StudioSystem:Connect(function(route)
+		if route == "toggle_explorer" then
+			visible = not visible
+		end
+	end)
+end
 
 local retainedStorage = {}
 
@@ -30,9 +39,9 @@ local iconPath = "./src/assets/images/icons/"
 local textBoxStorage = {}
 local contextMenuStorage = {}
 
-local arrowRight = Argon:CreateImageFromPath(iconPath .. "ArrowRight.png")
-local expandedIcon = Argon:CreateImageFromPath(iconPath .. "ArrowDown.png")
-local plusIcon = Argon:CreateImageFromPath("./src/assets/images/plus.png")
+local arrowRight = Argon:CreateImageFromPath(iconPath .. "ArrowRight.svg")
+local expandedIcon = Argon:CreateImageFromPath(iconPath .. "ArrowDown.svg")
+local plusIcon = Argon:CreateImageFromPath(iconPath .. "Plus.svg")
 
 local expanded = {}
 local createMenu = {
@@ -168,6 +177,9 @@ local function clickedInstance(instance)
 end
 
 renderer.Pool.new("2d", function()
+	if not visible then
+		return
+	end
 	local dt = renderer.RuntimeLibrary.dt
 	local absolutePosition = Explorer.AbsolutePosition
 	local absoluteSize = Explorer.AbsoluteSize
@@ -383,7 +395,7 @@ renderer.Pool.new("2d", function()
 						end
 
 						if not iconCache[instance.ClassName] then
-							local path = iconPath .. instance.ClassName .. ".png"
+							local path = iconPath .. instance.ClassName .. ".svg"
 							iconCache[instance.ClassName] = Argon:CreateImageFromPath(path)
 						end
 

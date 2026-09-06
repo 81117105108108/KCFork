@@ -10,6 +10,7 @@ local propTable = {
 	_manifoldptr = nil,
 	_mesh = nil,
 	_cpuMeshData = nil,
+	_meshUsesPartSize = false,
 	CollisionFidelity = Enum.CollisionFidelity.Default,
 	RenderFidelity = Enum.RenderFidelity.Automatic,
 }

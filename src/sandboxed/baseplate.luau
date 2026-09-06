@@ -15,7 +15,7 @@ baseplate.Parent = workspace
 baseplate.Anchored = true
 
 local Texture = Instance.new("Texture")
-Texture.Texture = "./src/assets/images/tex.png"
+Texture.Texture = "kineasset://images/tex.png"
 Texture.Parent = baseplate
 
 local spawnLocation = Instance.new("Part")
@@ -26,5 +26,5 @@ spawnLocation.Anchored = true
 spawnLocation.Parent = workspace
 
 local Decal = Instance.new("Decal")
-Decal.Texture = "./src/assets/icon/spawn.png"
+Decal.Texture = "kineasset://icon/spawn.png"
 Decal.Parent = spawnLocation

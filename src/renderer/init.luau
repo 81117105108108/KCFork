@@ -1,5 +1,3 @@
---!strict
-local resources = require("../engine/ffi/ResourceTracker").shared
 local task = zune.task
 local KiRend = {}
 
@@ -137,6 +135,7 @@ export type KiRendConf = {
 	title: string,
 	vsync: boolean?,
 	WGI: ("opengl" | "vulkan")?,
+	enable3D: boolean?,
 }
 
 function KiRend.new(config: KiRendConf)
@@ -145,8 +144,8 @@ function KiRend.new(config: KiRendConf)
 	local frameTime = 0
 	local lastFrameTime = os.clock()
 	local isRunning = false
-	local isShutdown = false
 	local pending_clicks = {}
+	local enable3D = config.enable3D ~= false
 
 	argon:Init()
 
@@ -187,19 +186,25 @@ function KiRend.new(config: KiRendConf)
 	local skia_tools_ctx = argon:CreateSkiaSurface(config.width, config.height)
 	local activeCamera = nil
 
-	local filament_tex = argon:CreateTexture({
-		width = config.width,
-		height = config.height,
-		renderer = window_renderer,
-		pixelFormat = "ABGR8888",
-		access = "STREAMING",
-	})
+	local filament_tex = if enable3D
+		then argon:CreateTexture({
+			width = config.width,
+			height = config.height,
+			renderer = window_renderer,
+			pixelFormat = "ABGR8888",
+			access = "STREAMING",
+		})
+		else nil
 
 	argon:ShowWindow(window)
 	if window.WGI ~= "vulkan" then
 		argon:BeginFrame(context)
+	elseif not enable3D then
+		argon:InitVulkanCompositor(window)
 	end
-	argon:Init3D(window)
+	if enable3D then
+		argon:Init3D(window)
+	end
 
 	local renderer_eventbus = signal.new()
 	local renderer_hooks = {
@@ -218,7 +223,7 @@ function KiRend.new(config: KiRendConf)
 		gui_above = {},
 	}
 	local renderer_pool_order = 0
-	local sorted_pool_cache = {}
+	local sorted_pool_cache = setmetatable({}, { __mode = "k" })
 	local renderer_storage = {
 		fonts = {},
 		sounds = {},
@@ -226,13 +231,12 @@ function KiRend.new(config: KiRendConf)
 	local renderer_font_resolver
 	local renderer_watching_keys = {}
 	local renderer_draw_calls = {}
-	local immediate_draw_items = {}
 	local renderer_mesh_draw_lists = {}
 	local renderer_instanced_draw_calls = {}
 	local renderer_meshes = {}
 	local ENGINE_PROFILER = nil
 
-	local Dimension = "3D"
+	local Dimension = enable3D and "3D" or "2D"
 
 	local draw_calls_count = 0
 	local mesh_draw_lists_count = 0
@@ -284,8 +288,9 @@ function KiRend.new(config: KiRendConf)
 	}
 
 	local function getSortedPool(pool)
-		if sorted_pool_cache[pool] then
-			return sorted_pool_cache[pool]
+		local cached = sorted_pool_cache[pool]
+		if cached then
+			return cached
 		end
 		local sorted = {}
 		for id, entry in pairs(pool) do
@@ -301,6 +306,10 @@ function KiRend.new(config: KiRendConf)
 		return sorted
 	end
 
+	local function invalidateSortedPool(pool)
+		sorted_pool_cache[pool] = nil
+	end
+
 	local rendererObject
 
 	rendererObject = {
@@ -310,7 +319,7 @@ function KiRend.new(config: KiRendConf)
 		Shader = mockShader,
 		Raylib = mockRaylib,
 		Texture = mockTexture(),
-		Enable3D = true,
+		Enable3D = enable3D,
 		Blur = mockBlur.Init(config.width, config.height),
 		AboveCanvas = skia_tools_ctx,
 
@@ -324,8 +333,14 @@ function KiRend.new(config: KiRendConf)
 		UpdateCamera = true,
 		PerfStats = perf_stats,
 
+		Dimension = Dimension,
 		SetDimension = function(self, dimension: "2D" | "3D")
+			if dimension == "3D" and not enable3D then
+				return false
+			end
 			Dimension = dimension
+			self.Dimension = dimension
+			return true
 		end,
 
 		RuntimeLibrary = {
@@ -515,35 +530,45 @@ function KiRend.new(config: KiRendConf)
 					pool = renderer_pool.gui_above
 				end
 
-				assert(pool, "Unknown render pool: " .. tostring(type))
+				local id
+				repeat
+					id = math.random(1, 99999)
+				until pool[id] == nil
+
 				renderer_pool_order += 1
-				local id = renderer_pool_order
 				pool[id] = {
 					render = renderFn,
 					object = nil,
 					priority = priority or 0,
 					order = renderer_pool_order,
 				}
-				sorted_pool_cache[pool] = nil
+				invalidateSortedPool(pool)
 
 				return id
 			end,
 
 			SetPriority = function(id, newPriority: number)
-				for _, pool in pairs(renderer_pool) do
-					local entry = pool[id]
-					if entry and entry.priority ~= newPriority then
-						entry.priority = newPriority
-						sorted_pool_cache[pool] = nil
-					end
+				if renderer_pool.gui[id] then
+					renderer_pool.gui[id].priority = newPriority
+					invalidateSortedPool(renderer_pool.gui)
+				elseif renderer_pool.object[id] then
+					renderer_pool.object[id].priority = newPriority
+					invalidateSortedPool(renderer_pool.object)
+				elseif renderer_pool.gizmos[id] then
+					renderer_pool.gizmos[id].priority = newPriority
+					invalidateSortedPool(renderer_pool.gizmos)
+				elseif renderer_pool.gui_above[id] then
+					renderer_pool.gui_above[id].priority = newPriority
+					invalidateSortedPool(renderer_pool.gui_above)
 				end
 			end,
 
 			Destroy = function(id)
-				for _, pool in pairs(renderer_pool) do
+				for _, pool in ipairs({ renderer_pool.gui, renderer_pool.object, renderer_pool.gizmos, renderer_pool.gui_above }) do
 					if pool[id] then
 						pool[id] = nil
-						sorted_pool_cache[pool] = nil
+						invalidateSortedPool(pool)
+						break
 					end
 				end
 			end,
@@ -690,13 +715,6 @@ function KiRend.new(config: KiRendConf)
 		-- no-op in headless
 	end
 
-	local function flushImmediateDraws()
-		if #immediate_draw_items > 0 then
-			argon:DrawMeshList(window, immediate_draw_items, #immediate_draw_items)
-			table.clear(immediate_draw_items)
-		end
-	end
-
 	function rendererObject:Render3D()
 		local render3DStart = os.clock()
 		local meshCalls = 0
@@ -723,7 +741,7 @@ function KiRend.new(config: KiRendConf)
 		local render3DUpdateStart = os.clock()
 		for _, item in ipairs(sorted3DPool) do
 			local entry = item.entry
-			if renderer_pool.object[item.id] == entry and entry.render then
+			if entry.render then
 				entry.render(rendererObject.RuntimeLibrary)
 			end
 		end
@@ -741,7 +759,13 @@ function KiRend.new(config: KiRendConf)
 			local look = cf:GetLookVector()
 			local target = pos + look
 
-			argon:SetCameraLookAt(window, pos, target, cf:GetUpVector())
+			argon:SetCameraPosition(window, {
+				X = pos.X,
+				Y = pos.Y,
+				Z = pos.Z,
+			})
+
+			argon:SetCameraLookAt(window, pos, target)
 		end
 		perf_stats.call3d_ms = 0
 		local callStart = os.clock()
@@ -753,21 +777,31 @@ function KiRend.new(config: KiRendConf)
 		then
 			if Dimension == "3D" then
 				for i = 1, draw_calls_count do
-					local queued = renderer_draw_calls[i]
-					local drawCall = queued.mesh
-					local beginCallback = queued.Begin or drawCall.Begin
-					local endCallback = queued.End or drawCall.End
-					if beginCallback then
-						flushImmediateDraws()
-						beginCallback()
+					local drawCall = renderer_draw_calls[i].mesh
+					local rawMatrix = drawCall.matrix
+					if type(rawMatrix) == "table" and rawMatrix.getraw then
+						rawMatrix = rawMatrix:getraw()
 					end
-					immediate_draw_items[#immediate_draw_items + 1] = drawCall
-					if endCallback then
-						flushImmediateDraws()
-						endCallback()
+
+					argon:DrawMesh(
+						window,
+						drawCall.mesh,
+						{ R = drawCall.color.R, G = drawCall.color.G, B = drawCall.color.B, A = 1 },
+						math.clamp(drawCall.roughness or 0.5, 0, 1),
+						math.clamp(drawCall.metallic or 0.0, 0, 1),
+						rawMatrix,
+						true,
+						true,
+						false,
+						drawCall.texture,
+						drawCall.MaterialKind or 0,
+						drawCall.MaterialTileScale or 1
+					)
+
+					if drawCall.End then
+						drawCall.End()
 					end
 				end
-				flushImmediateDraws()
 				for i = 1, mesh_draw_lists_count do
 					local drawList = renderer_mesh_draw_lists[i]
 					argon:DrawMeshList(window, drawList.items, drawList.count, drawList.streamId, drawList.version)
@@ -811,7 +845,7 @@ function KiRend.new(config: KiRendConf)
 
 		for _, item in ipairs(getSortedPool(renderer_pool.gizmos)) do
 			local entry = item.entry
-			if renderer_pool.gizmos[item.id] == entry and entry.render then
+			if entry.render then
 				entry.render(rendererObject.RuntimeLibrary)
 			end
 		end
@@ -846,7 +880,7 @@ function KiRend.new(config: KiRendConf)
 		for _, item in ipairs(sortedGuiPool) do
 			local entry = item.entry
 
-			if renderer_pool.gui[item.id] == entry and entry.render then
+			if entry.render then
 				entry.render(rendererObject.RuntimeLibrary)
 			end
 		end
@@ -863,12 +897,12 @@ function KiRend.new(config: KiRendConf)
 		local uiStart = os.clock()
 
 		local sortedGuiPool = getSortedPool(renderer_pool.gui_above)
-		perf_stats.gui_roots += #sortedGuiPool
+		perf_stats.gui_roots = #sortedGuiPool
 
 		for _, item in ipairs(sortedGuiPool) do
 			local entry = item.entry
 
-			if renderer_pool.gui_above[item.id] == entry and entry.render then
+			if entry.render then
 				entry.render(rendererObject.RuntimeLibrary)
 			end
 		end
@@ -893,7 +927,11 @@ function KiRend.new(config: KiRendConf)
 		window.Width = newWidth
 		window.Height = newHeight
 
-		argon:ResizePixelBuffer(window, newWidth, newHeight)
+		if enable3D then
+			argon:ResizePixelBuffer(window, newWidth, newHeight)
+		elseif window.WGI == "vulkan" then
+			argon:ResizeVulkanCompositor(window, newWidth, newHeight)
+		end
 
 		local oldWindowSurface = window._rasterUIHandle or window._uihandle
 		if oldWindowSurface then
@@ -930,15 +968,18 @@ function KiRend.new(config: KiRendConf)
 			access = "STREAMING",
 		})
 
-		argon:DestroyTexture(filament_tex)
-		filament_tex = argon:CreateTexture({
-			width = newWidth,
-			height = newHeight,
-			renderer = window_renderer,
-			pixelFormat = "ABGR8888",
-			access = "STREAMING",
-		})
+		if enable3D then
+			argon:DestroyTexture(filament_tex)
+			filament_tex = argon:CreateTexture({
+				width = newWidth,
+				height = newHeight,
+				renderer = window_renderer,
+				pixelFormat = "ABGR8888",
+				access = "STREAMING",
+			})
+		end
 	end
+
 	function rendererObject:SyncWindowSize()
 		local pixelWidth, pixelHeight = argon:GetWindowPixelSize(window)
 		if pixelWidth and pixelHeight and pixelWidth > 0 and pixelHeight > 0 then
@@ -950,7 +991,6 @@ function KiRend.new(config: KiRendConf)
 	end
 
 	function rendererObject:step(time)
-		resources:Sweep()
 		local frameStart = os.clock()
 		local frameSetupStart = frameStart
 
@@ -988,6 +1028,10 @@ function KiRend.new(config: KiRendConf)
 			rendererObject:Resize(newWidth, newHeight)
 		end
 
+		local inputStart = os.clock()
+		renderer_eventbus:Fire("Input", frameTime)
+		perf_stats.input_ms = (os.clock() - inputStart) * 1000
+
 		local beginFrameStart = os.clock()
 		argon:BeginFrame(context)
 		if window.WGI == "vulkan" then
@@ -1000,33 +1044,30 @@ function KiRend.new(config: KiRendConf)
 
 		if ENGINE_PROFILER then
 			ENGINE_PROFILER:End()
-			ENGINE_PROFILER:Begin("Update")
-		end
-
-		-- Apply input-driven camera changes and interpolated transforms to this frame.
-		local updateStart = os.clock()
-		local renderstepHooksStart = os.clock()
-		for _, callback in ipairs(renderer_hooks.Renderstep) do
-			pcall(callback, frameTime)
-		end
-		perf_stats.renderstep_hooks_ms = (os.clock() - renderstepHooksStart) * 1000
-		perf_stats.rendereventbus_conns = renderer_eventbus:GetConnectionCount()
-		local scriptRenderStart = os.clock()
-		renderer_eventbus:Fire("PreRender", frameTime)
-		renderer_eventbus:Fire("RenderStepped", frameTime)
-		perf_stats.script_render_ms = (os.clock() - scriptRenderStart) * 1000
-		perf_stats.input_key_ms = 0
-		perf_stats.update_ms = (os.clock() - updateStart) * 1000
-		if ENGINE_PROFILER then
-			ENGINE_PROFILER:End()
 			ENGINE_PROFILER:Begin("Render")
 		end
 
 		local renderStart = os.clock()
-		rendererObject:Render3D()
+		if enable3D then
+			rendererObject:Render3D()
+		end
 		rendererObject:Render2D()
 		local filamentStart = os.clock()
-		argon:Render3D(window, frameTime)
+		if enable3D then
+			if activeCamera then
+				local viewport = rendererObject.tex3d_rect
+				local viewportWidth = viewport and viewport.Width or rendererObject.Width
+				local viewportHeight = viewport and viewport.Height or rendererObject.Height
+				argon:SetCameraPerspective(
+					window,
+					tonumber(activeCamera.FieldOfView) or 60,
+					viewportWidth / math.max(1, viewportHeight),
+					1,
+					500
+				)
+			end
+			argon:Render3D(window, frameTime)
+		end
 		perf_stats.filament_ms = (os.clock() - filamentStart) * 1000
 		if window.WGI == "vulkan" then
 			local overlayWaitStart = os.clock()
@@ -1046,9 +1087,9 @@ function KiRend.new(config: KiRendConf)
 				+ perf_stats.compositor_submit_present_ms
 		else
 			perf_stats.compositor_ms = 0
-			argon:BlitToScreen3D(window, 0, 0, context.Window.Width, context.Window.Height)
-			local pixels = argon:GetPixels(window)
-			if pixels then
+			if enable3D then
+				argon:BlitToScreen3D(window, 0, 0, context.Window.Width, context.Window.Height)
+				local pixels = argon:GetPixels(window)
 				argon:UpdateTexture(filament_tex, pixels, context.Window.Width * 4)
 			end
 
@@ -1060,12 +1101,40 @@ function KiRend.new(config: KiRendConf)
 			rendererObject:Render2DAbove()
 
 			argon:UpdateSkiaTexture(skia_tools, skia_tools_ctx)
-			argon:DrawTextureFlipped(window_renderer, filament_tex, rendererObject.tex3d_rect)
 			argon:DrawTexture(window_renderer, skia_tools)
+
+			if enable3D then
+				argon:DrawTextureFlipped(window_renderer, filament_tex, rendererObject.tex3d_rect)
+			end
 
 			argon:RenderPresent(window_renderer)
 		end
 		perf_stats.render_ms = (os.clock() - renderStart) * 1000
+
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:End()
+			ENGINE_PROFILER:Begin("Update")
+		end
+
+		local updateStart = os.clock()
+
+		local renderstepHooksStart = os.clock()
+		for _, v in pairs(renderer_hooks.Renderstep) do
+			pcall(v, frameTime)
+		end
+		perf_stats.renderstep_hooks_ms = (os.clock() - renderstepHooksStart) * 1000
+
+		perf_stats.rendereventbus_conns = renderer_eventbus:GetConnectionCount()
+
+		local scriptRenderStart = os.clock()
+		renderer_eventbus:Fire("PreRender", frameTime)
+		renderer_eventbus:Fire("RenderStepped", frameTime)
+		perf_stats.script_render_ms = (os.clock() - scriptRenderStart) * 1000
+
+		local keyboardListenStart = os.clock()
+		perf_stats.input_key_ms = (os.clock() - keyboardListenStart) * 1000
+
+		perf_stats.update_ms = (os.clock() - updateStart) * 1000
 
 		if ENGINE_PROFILER then
 			ENGINE_PROFILER:End()
@@ -1101,7 +1170,6 @@ function KiRend.new(config: KiRendConf)
 		local now = os.clock()
 		frameTime = now - lastFrameTime
 		lastFrameTime = now
-		rendererObject.Frametime = frameTime
 
 		time += frameTime
 		frameCount += 1
@@ -1130,13 +1198,6 @@ function KiRend.new(config: KiRendConf)
 	end
 
 	function rendererObject:Shutdown()
-		if isShutdown then
-			return
-		end
-		isShutdown = true
-		isRunning = false
-		local cleanupOK, cleanupError = pcall(resources.CollectAll, resources)
-		if not cleanupOK then warn(cleanupError) end
 		for _, callback in pairs(renderer_hooks.Shutdown) do
 			local success, result = pcall(callback)
 			if not success then
@@ -1149,21 +1210,19 @@ function KiRend.new(config: KiRendConf)
 		table.clear(renderer_pool.gui)
 		table.clear(renderer_pool.object)
 		table.clear(renderer_pool.gizmos)
-		table.clear(renderer_pool.gui_above)
-		table.clear(sorted_pool_cache)
 
-		-- The compositor owns its borrowed frame surface; free only our rasters.
-		local rasterSurface = window._rasterUIHandle
-			or (if window._uihandle ~= window._vulkanCompositorFrameSurface then window._uihandle else nil)
-		if rasterSurface then
-			argon:DestroySkiaSurface(rasterSurface)
+		if window and window._uihandle then
+			argon:DestroySkiaSurface(window._uihandle)
 		end
-		if skia_tools_ctx and skia_tools_ctx._uihandle then
-			argon:DestroySkiaSurface(skia_tools_ctx._uihandle)
+		if skia_tex then
+			argon:DestroyTexture(skia_tex)
 		end
-		argon:DestroyTexture(skia_tex)
-		argon:DestroyTexture(skia_tools)
-		argon:DestroyTexture(filament_tex)
+		if skia_tools then
+			argon:DestroyTexture(skia_tools)
+		end
+		if filament_tex then
+			argon:DestroyTexture(filament_tex)
+		end
 		argon:Shutdown(window, window_renderer, context)
 		zune.process.exit(0)
 	end

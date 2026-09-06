@@ -27,6 +27,8 @@ ReplicationSchema.Properties = {
 	PrimaryPart = 24,
 	Shape = 25,
 	Data = 26,
+	ReplicationMode = 27,
+	ReplicationGroup = 28,
 }
 ReplicationSchema.Names = {}
 for name, id in pairs(ReplicationSchema.Properties) do
@@ -34,7 +36,9 @@ for name, id in pairs(ReplicationSchema.Properties) do
 end
 ReplicationSchema.Classes = {}
 
-local nextPropertyId = 27
+local nextPropertyId = 29
+
+local UNIVERSAL_PROPERTIES = { "Name", "ReplicationMode", "ReplicationGroup" }
 
 function ReplicationSchema.RegisterProperty(name, id)
 	assert(type(name) == "string" and #name > 0, "property name must be a non-empty string")
@@ -54,8 +58,8 @@ end
 function ReplicationSchema.RegisterClass(className, properties)
 	assert(type(className) == "string" and #className > 0, "class name must be a non-empty string")
 	assert(type(properties) == "table", "properties must be an array")
-	local registered = { "Name" }
-	local seen = { Name = true }
+	local registered = table.clone(UNIVERSAL_PROPERTIES)
+	local seen = { Name = true, ReplicationMode = true, ReplicationGroup = true }
 	for _, property in ipairs(properties) do
 		assert(type(property) == "string", "property names must be strings")
 		ReplicationSchema.RegisterProperty(property)
@@ -194,13 +198,37 @@ registerBuiltInClass("ProximityPrompt", {
 	"ActionText", "Enabled", "HoldDuration", "KeyboardKeyCode", "MaxActivationDistance",
 	"MaxIndicatorDistance", "ObjectText", "RequiresLineOfSight", "UIOffset",
 })
+registerBuiltInClass("PointLight", {
+	"Color", "Brightness", "Range", "CastShadow", "Enabled", "Transparency", "Position",
+})
+registerBuiltInClass("SpotLight", {
+	"Color", "Brightness", "Range", "CastShadow", "Enabled", "Transparency", "Position", "Angle", "Face",
+})
+registerBuiltInClass("SurfaceLight", {
+	"Color", "Brightness", "Range", "CastShadow", "Enabled", "Transparency", "Position", "Angle", "Face",
+})
+registerBuiltInClass("Sound", {
+	"SoundId", "Volume", "Pitch", "Looped", "Playing", "TimePosition", "IsStream", "SoundGroup",
+	"Position", "Velocity", "Direction", "MinDistance", "MaxDistance", "RollOffMode", "Is3D",
+})
+registerBuiltInClass("ReverbSoundEffect", {
+	"Enabled", "DecayTime", "Density", "Diffusion", "DryLevel", "WetLevel",
+})
+registerBuiltInClass("EchoSoundEffect", {
+	"Enabled", "Delay", "Feedback", "DryLevel", "WetLevel",
+})
+registerBuiltInClass("EqualizerSoundEffect", { "Enabled", "LowGain", "MidGain", "HighGain" })
+registerBuiltInClass("LowPassSoundEffect", { "Enabled", "CutoffFrequency" })
+registerBuiltInClass("HighPassSoundEffect", { "Enabled", "CutoffFrequency" })
 ReplicationSchema.RegisterProperty("JumpQueueWindow")
 ReplicationSchema.RegisterProperty("MeshId")
 ReplicationSchema.RegisterProperty("MeshScale")
 
-local BASE = { "Name" }
+local BASE = UNIVERSAL_PROPERTIES
 local PART = {
 	"Name",
+	"ReplicationMode",
+	"ReplicationGroup",
 	"CFrame",
 	"Size",
 	"Color",
@@ -215,10 +243,12 @@ local PART = {
 	"MeshScale",
 }
 local HUMANOID = {
-	"Name", "Health", "MaxHealth", "WalkSpeed", "JumpPower", "AutoRotate", "DisplayName", "RootPart",
+	"Name", "ReplicationMode", "ReplicationGroup", "Health", "MaxHealth", "WalkSpeed", "JumpPower", "AutoRotate", "DisplayName", "RootPart",
 }
 local CONTROLLER = {
 	"Name",
+	"ReplicationMode",
+	"ReplicationGroup",
 	"WalkSpeed",
 	"SprintMultiplier",
 	"JumpPower",
@@ -233,10 +263,10 @@ local CONTROLLER = {
 	"Enabled",
 	"RootPart",
 }
-local PLAYER = { "Name", "UserId", "Character", "Health", "MaxHealth", "WalkSpeed", "JumpPower" }
-local MODEL = { "Name", "PrimaryPart" }
-local VALUE = { "Name", "Value" }
-local REMOTE_DATA = { "Name", "Data" }
+local PLAYER = { "Name", "ReplicationMode", "ReplicationGroup", "UserId", "Character", "Health", "MaxHealth", "WalkSpeed", "JumpPower" }
+local MODEL = { "Name", "ReplicationMode", "ReplicationGroup", "PrimaryPart" }
+local VALUE = { "Name", "ReplicationMode", "ReplicationGroup", "Value" }
+local REMOTE_DATA = { "Name", "ReplicationMode", "ReplicationGroup", "Data" }
 
 function ReplicationSchema.GetProperties(instance)
 	local custom = ReplicationSchema.Classes[instance.ClassName]
@@ -265,10 +295,10 @@ function ReplicationSchema.GetProperties(instance)
 		return REMOTE_DATA
 	end
 	if instance.Text ~= nil then
-		return { "Name", "Text", "Visible" }
+		return { "Name", "ReplicationMode", "ReplicationGroup", "Text", "Visible" }
 	end
 	if instance.Enabled ~= nil then
-		return { "Name", "Enabled" }
+		return { "Name", "ReplicationMode", "ReplicationGroup", "Enabled" }
 	end
 	return BASE
 end

@@ -101,6 +101,38 @@ function ReplicatorService:AssignOwnership(instance, player)
 	return active and active.AssignOwnership and active:AssignOwnership(instance, player) or nil
 end
 
+function ReplicatorService:AddPlayerToGroup(player, groupName)
+	if not active or not active.AddPlayerToGroup then
+		return false
+	end
+	return active:AddPlayerToGroup(player, groupName)
+end
+
+function ReplicatorService:RemovePlayerFromGroup(player, groupName)
+	if not active or not active.RemovePlayerFromGroup then
+		return false
+	end
+	return active:RemovePlayerFromGroup(player, groupName)
+end
+
+function ReplicatorService:IsPlayerInGroup(player, groupName)
+	return active ~= nil and active.IsPlayerInGroup ~= nil and active:IsPlayerInGroup(player, groupName) or false
+end
+
+function ReplicatorService:ReplicateTo(instance, player)
+	if not active or not active.ReplicateTo then
+		return false
+	end
+	return active:ReplicateTo(instance, player)
+end
+
+function ReplicatorService:StopReplicatingTo(instance, player)
+	if not active or not active.StopReplicatingTo then
+		return false
+	end
+	return active:StopReplicatingTo(instance, player)
+end
+
 function ReplicatorService:CreateNetworkEmulator(config)
 	return NetworkEmulator.new(config)
 end

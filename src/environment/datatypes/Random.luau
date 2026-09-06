@@ -15,16 +15,16 @@ function Random:_next()
 	return self._rng:nextNumber()
 end
 
-function Random:NextInteger(min: number, max: number)
-	local r = self:_next()
-	return min + (r % (max - min + 1))
+function Random:NextInteger(min: number, max: number): number
+	return self._rng:nextInteger(min, max)
 end
 
-function Random:NextNumber(min: number?, max: number?)
-	min = min or 0
-	max = max or 1
-	local r = self:_next() / 0xFFFFFFFF
-	return min + (max - min) * r
+function Random:NextNumber(min: number?, max: number?): number
+	if min == nil and max == nil then
+		return self._rng:nextNumber()
+	end
+
+	return self._rng:nextNumber(min or 0, max or 1)
 end
 
 function Random:NextUnitVector()

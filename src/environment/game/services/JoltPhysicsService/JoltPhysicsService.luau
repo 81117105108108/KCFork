@@ -8,6 +8,7 @@ local lib = jolt.lib
 local Enum = require("@EnumMap")
 local structs = jolt.structs
 local bodyMaker = require("@_BodyMaker")
+local CollisionGeometry = require("./CollisionGeometry")
 local RaycastResult = require("@RaycastResult")
 local NetworkOwnership = require("@NetworkOwnership")
 local KinemiumPhysicsModule = require("../../../../services/KinemiumPhysicsService")
@@ -248,94 +249,25 @@ local function shouldHavePhysicsBody(part)
 	)
 end
 
-local function getMeshPartGeometry(part)
-	local mesh = part.MeshObject
-	if not mesh or (mesh.ClassName ~= "EditableMesh" and mesh.class ~= "EditableMesh") then
-		return nil
-	end
-
-	local vertexIds = {}
-	for id in pairs(mesh._vertices or {}) do
-		table.insert(vertexIds, id)
-	end
-	if #vertexIds < 3 then
-		return nil
-	end
-
-	table.sort(vertexIds)
-
-	local points = {}
-	local vertexIndex = {}
-	local meshScale = part.MeshScale or 1
-	local collisionScale = part.CollisionScale or 1
-	local sx = part.Size.X * meshScale * collisionScale
-	local sy = part.Size.Y * meshScale * collisionScale
-	local sz = part.Size.Z * meshScale * collisionScale
-
-	for index, vertexId in ipairs(vertexIds) do
-		local position = mesh._vertices[vertexId]
-		if position then
-			points[index] = {
-				position.X * sx,
-				position.Y * sy,
-				position.Z * sz,
-			}
-			vertexIndex[vertexId] = index - 1
-		end
-	end
-
-	local triangles = {}
-	for _, face in pairs(mesh._faces or {}) do
-		local i0 = vertexIndex[face[1]]
-		local i1 = vertexIndex[face[2]]
-		local i2 = vertexIndex[face[3]]
-		if i0 ~= nil and i1 ~= nil and i2 ~= nil then
-			table.insert(triangles, { i0, i1, i2 })
-		end
-	end
-
-	if #triangles == 0 then
-		return nil
-	end
-
-	return points, triangles
-end
-
-local function buildDynamicMeshFallbackShape(part, halfSize, convexRadius)
-	local size = part.Size or Vector3.new(1, 1, 1)
-	local minSize = math.min(size.X, size.Y, size.Z)
-	local maxSize = math.max(size.X, size.Y, size.Z)
-
-	if minSize > 0 and (maxSize / minSize) <= 1.1 then
-		return lib.JPH_SphereShape_Create(minSize * 0.5)
-	end
-
-	return lib.JPH_BoxShape_Create(halfSize, convexRadius)
-end
-
 local function buildShapeForPart(part, halfSize, motionType)
 	local convexRadius = math.min(0.05, math.min(part.Size.X, part.Size.Y, part.Size.Z) * 0.1)
 
-	if part:IsA("MeshPart") then
-		local geometryPoints, geometryTriangles = getMeshPartGeometry(part)
-		if geometryPoints and geometryTriangles and part.CollisionFidelity ~= Enum.CollisionFidelity.Box then
-			if part.CollisionFidelity == Enum.CollisionFidelity.Hull then
-				if #geometryPoints >= 4 then
-					local hullShape = bodyMaker.convexHullShape(geometryPoints, convexRadius)
-					if hullShape ~= ffi.null then
-						return hullShape
-					end
+	if CollisionGeometry.IsCustomPart(part) then
+		local geometryPoints, geometryTriangles = CollisionGeometry.Get(part)
+		local shapeKind = CollisionGeometry.ChooseShapeKind(part, motionType, part.CollisionFidelity)
+		if geometryPoints and geometryTriangles and shapeKind ~= "primitive" then
+			if shapeKind == "hull" and #geometryPoints >= 4 then
+				local hullShape = bodyMaker.convexHullShape(geometryPoints, convexRadius)
+				if hullShape ~= ffi.null then
+					return hullShape
 				end
-				warn("[Physics] Convex hull creation failed for", part.Name, "- falling back to primitive shape")
-				return buildDynamicMeshFallbackShape(part, halfSize, convexRadius)
-			elseif motionType == 2 then
-				return buildDynamicMeshFallbackShape(part, halfSize, convexRadius)
-			else
+			elseif shapeKind == "mesh" then
 				local meshShape = bodyMaker.meshShape(geometryPoints, geometryTriangles)
 				if meshShape ~= ffi.null then
 					return meshShape
 				end
 			end
+			warn("[Physics] Custom collision shape creation failed for", part.Name, "- falling back to box")
 		end
 	end
 
@@ -344,6 +276,10 @@ local function buildShapeForPart(part, halfSize, motionType)
 	elseif part.Shape == Enum.PartType.Ball then
 		local radius = part.Size.X * 0.5
 		return lib.JPH_SphereShape_Create(radius)
+	elseif part.Shape == Enum.PartType.Cylinder then
+		local halfHeight = part.Size.Y * 0.5
+		local radius = part.Size.X * 0.5
+		return lib.JPH_CylinderShape_Create(halfHeight, radius, convexRadius)
 	end
 
 	return lib.JPH_BoxShape_Create(halfSize, 0.05)
@@ -362,6 +298,7 @@ local function updateBodyShape(part, bodyInterface, bodyID)
 	end
 
 	lib.JPH_BodyInterface_SetShape(bodyInterface, bodyID, newShape, 1, 1)
+	lib.JPH_Shape_Destroy(newShape)
 	return true
 end
 
@@ -378,11 +315,13 @@ local function createBody(bodyInterface, part, motionType)
 	end
 
 	if not part.CFrame then
+		lib.JPH_Shape_Destroy(shape)
 		return
 	end
 
 	part.Position = part.CFrame.Position
 	if not part.Position then
+		lib.JPH_Shape_Destroy(shape)
 		return
 	end
 
@@ -401,6 +340,11 @@ local function createBody(bodyInterface, part, motionType)
 	local layer = getLayerForPart(part)
 
 	local bodySettings = lib.JPH_BodyCreationSettings_Create3(shape, position, rotation, motionType, layer)
+	lib.JPH_Shape_Destroy(shape)
+	if bodySettings == ffi.null then
+		warn("[Physics] Failed to create body settings for", part.Name)
+		return
+	end
 	lib.JPH_BodyCreationSettings_SetAllowSleeping(bodySettings, 1)
 
 	lib.JPH_BodyCreationSettings_SetAllowDynamicOrKinematic(bodySettings, 1)
@@ -547,6 +491,10 @@ local function readVec3(ptr)
 end
 
 KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
+	if FlagExists("2d") then
+		log("[Physics] Skipping Jolt initialization for 2D-only mode")
+		return
+	end
 	physicsDatamodel = game
 	task.spawn(function()
 		repeat
@@ -934,6 +882,8 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 						or property == "CollisionFidelity"
 						or property == "CollisionScale"
 						or property == "MeshScale"
+						or property == "_cpuMeshData"
+						or property == "_meshUsesPartSize"
 					then
 						updateBodyShape(part, bodyInterface, bodyID)
 						if part.Anchored then
@@ -1195,6 +1145,9 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				local shape
 				if data.Shape == Enum.PartType.Ball then
 					shape = lib.JPH_SphereShape_Create(size.X * 0.5)
+				elseif data.Shape == Enum.PartType.Cylinder then
+					local convexRadius = math.min(0.05, math.min(size.X, size.Y, size.Z) * 0.1)
+					shape = lib.JPH_CylinderShape_Create(size.Y * 0.5, size.X * 0.5, convexRadius)
 				else
 					shape = lib.JPH_BoxShape_Create(halfSize, 0.05)
 				end
@@ -1224,6 +1177,10 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				local motionType = data.Anchored and 0 or 2
 
 				local bodySettings = lib.JPH_BodyCreationSettings_Create3(shape, position, rotation, motionType, layer)
+				lib.JPH_Shape_Destroy(shape)
+				if bodySettings == ffi.null then
+					return nil
+				end
 				lib.JPH_BodyCreationSettings_SetAllowSleeping(bodySettings, 1)
 				lib.JPH_BodyCreationSettings_SetAllowDynamicOrKinematic(bodySettings, 1)
 

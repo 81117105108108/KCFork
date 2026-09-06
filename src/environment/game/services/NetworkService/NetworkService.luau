@@ -1,6 +1,7 @@
 local Instance = require("@Instance")
 
 local NetworkService = Instance.new("NetworkService")
+local COLLABORATION_INVITE_ADDRESS = "kinemiumcollab.quadigen.com"
 
 local function inviteCode(address, port, token)
 	return `kinecollab://{address}:{port}/{token}`
@@ -61,9 +62,8 @@ NetworkService.InitRenderer = function(renderer, renderer_signal, datamodel)
 		function NetworkService:HostCollaboration(options)
 			options = options or {}
 			stopCollaboration()
-			local bindAddress = options.BindAddress or "0.0.0.0"
-			local inviteAddress = options.InviteAddress or "127.0.0.1"
-			local port = tonumber(options.Port) or 1234
+			local bindAddress = options.BindAddress or GetFlagValue("address") or "0.0.0.0"
+			local port = tonumber(options.Port or GetFlagValue("port")) or 1234
 			local token = zune.crypto.uuid.v4() .. zune.crypto.uuid.v4()
 			local active = studioServer:Init(bindAddress, port, datamodel, renderer, {
 				token = token,
@@ -75,10 +75,10 @@ NetworkService.InitRenderer = function(renderer, renderer_signal, datamodel)
 			end
 			collaborationMode = "Hosting"
 			currentInvite = {
-				Address = inviteAddress,
+				Address = COLLABORATION_INVITE_ADDRESS,
 				Port = port,
 				Token = token,
-				Code = inviteCode(inviteAddress, port, token),
+				Code = inviteCode(COLLABORATION_INVITE_ADDRESS, port, token),
 			}
 			self.CollaborationMode = collaborationMode
 			self.CurrentInvite = currentInvite
@@ -150,7 +150,7 @@ NetworkService.InitRenderer = function(renderer, renderer_signal, datamodel)
 
 		-- Backwards-compatible entry points now use authenticated sessions.
 		function NetworkService:InitStudioServer(address, port)
-			return self:HostCollaboration({ BindAddress = address, InviteAddress = address, Port = port })
+			return self:HostCollaboration({ BindAddress = address, Port = port })
 		end
 
 		function NetworkService:InitStudioClient(address, port, token, name)
@@ -169,7 +169,6 @@ NetworkService.InitRenderer = function(renderer, renderer_signal, datamodel)
 		if isServer and isEditor then
 			self:HostCollaboration({
 				BindAddress = address,
-				InviteAddress = GetFlagValue("invite-address") or "127.0.0.1",
 				Port = port,
 			})
 		elseif isServer then

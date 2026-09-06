@@ -328,7 +328,7 @@ return function(params: typedefs.TabsParams, dt: number): (string?, number, numb
 		local disabled = item.Disabled == true
 		local selected = item.Value == selectedValue
 
-		local hovered = not disabled and renderer:isMouseInRect(rect)
+		local hovered = not disabled and renderer and renderer.isMouseInRect and renderer:isMouseInRect(rect)
 
 		if hovered and not selected and variant == "filled" then
 			local inset = params.ActiveInset or 2

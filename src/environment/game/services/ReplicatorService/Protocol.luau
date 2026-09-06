@@ -1,6 +1,6 @@
 local Protocol = {
 	Name = "KRP",
-	Version = 3,
+	Version = 4,
 	Kinds = {
 		Handshake = 1,
 		HandshakeAccepted = 2,

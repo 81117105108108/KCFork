@@ -1521,9 +1521,18 @@ Kine_VulkanCompositor_BeginOverlay(KineVulkanCompositor* compositor)
     VkSemaphore filamentFinished = VK_NULL_HANDLE;
     {
         std::unique_lock<std::mutex> lock(compositor->filamentMutex);
-        if (!compositor->frameActive || !compositor->filamentPrepared) {
-            kine_vk_set_error(compositor, "overlay requires an active Filament compositor frame");
+        if (!compositor->frameActive) {
+            kine_vk_set_error(compositor, "overlay requires an active compositor frame");
             return nullptr;
+        }
+
+        // A 2D-only renderer has no Filament pass between the base canvas and
+        // its above-canvas widgets. Keep drawing into the already acquired
+        // Skia surface instead of requiring a Filament present callback.
+        if (!compositor->filamentPrepared) {
+            compositor->overlayActive = true;
+            compositor->lastError.clear();
+            return compositor->currentSkiaSurface;
         }
         constexpr auto kFilamentTimeout = std::chrono::seconds(5);
         if (!compositor->filamentCondition.wait_for(

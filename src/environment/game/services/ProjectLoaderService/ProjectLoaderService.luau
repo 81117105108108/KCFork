@@ -28,6 +28,7 @@ export type ProjectConfig = {
 		name: string,
 		icon: string,
 		desc: string,
+		dimension: string?,
 	},
 
 	pointers: {
@@ -225,6 +226,11 @@ ProjectLoaderService.InitRenderer = function(renderer, renderer_signal, datamode
 
 			datamodel:SetMetadata("ProjectManif", conf.manifest)
 			datamodel:SetMetadata("ProjectPath", projectPath)
+			local configuredDimension = conf.manifest.info and conf.manifest.info.dimension or "3D"
+			configuredDimension = if string.upper(tostring(configuredDimension)) == "2D" then "2D" else "3D"
+			if renderer.SetDimension and renderer.Dimension ~= configuredDimension then
+				renderer:SetDimension(configuredDimension)
+			end
 			local runReadOnly = FlagExists("project-readonly")
 			local watch = FlagExists("project-watch")
 				or (conf.manifest.sync and conf.manifest.sync.live == true)

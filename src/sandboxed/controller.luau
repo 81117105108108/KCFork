@@ -194,9 +194,6 @@ RunService.RenderStepped:Connect(function(dt)
 	end
 
 	local head = character:FindFirstChild("Head")
-	if not head then
-		return
-	end
 
 	local isFirstPerson = zoomDist <= 0.5
 	local rmb = UserInputService:IsMouseButtonDown(Enum.MouseButton.Right)
@@ -215,13 +212,17 @@ RunService.RenderStepped:Connect(function(dt)
 	local camRot = CFrame.fromEulerAnglesYXZ(yaw, pitch, 0)
 
 	if isFirstPerson then
-		local firstPersonPos = head.CFrame.Position + Vector3.new(0, 1, 0)
+		local firstPersonPos = if head
+			then head.CFrame.Position + Vector3.new(0, 1, 0)
+			else rootPart.CFrame.Position + Vector3.new(0, 2, 0)
 		smoothCamPos = firstPersonPos
 
 		camera.CFrame = CFrame.new(firstPersonPos) * camRot
 		rootPart.CFrame = CFrame.new(rootPart.Position) * CFrame.fromEulerAnglesYXZ(yaw, 0, 0)
 
-		character.Head.Transparency = 1
+		if head then
+			head.Transparency = 1
+		end
 
 		humanoid.TurnSpeed = 999
 		humanoid:Face(Vector3.new(-math.sin(yaw), 0, -math.cos(yaw)))

@@ -94,8 +94,15 @@ local function matches(instance, payload)
 	return type(payload) == "table" and payload.remoteId == instance.NetworkId
 end
 
-function RemoteBridge.BindEvent(instance, datamodel, reliable)
+function RemoteBridge.BindEvent(instance, datamodel, defaultReliability)
 	local service = getService(datamodel)
+	local function reliability()
+		local configured = instance.Reliability
+		if configured ~= nil then
+			return configured
+		end
+		return defaultReliability
+	end
 	if service then
 		if IsServer == true then
 			service:OnEvent(EVENT_CHANNEL, function(player, payload)
@@ -119,7 +126,7 @@ function RemoteBridge.BindEvent(instance, datamodel, reliable)
 		return service and service:SendEvent(EVENT_CHANNEL, {
 			remoteId = getRemoteId(self),
 			arguments = packArguments(service, ...),
-		}, reliable) or false
+		}, reliability()) or false
 	end
 
 	function instance:FireClient(player, ...)
@@ -129,7 +136,7 @@ function RemoteBridge.BindEvent(instance, datamodel, reliable)
 		return service and service:SendEventTo(player, EVENT_CHANNEL, {
 			remoteId = getRemoteId(self),
 			arguments = packArguments(service, ...),
-		}, reliable) or false
+		}, reliability()) or false
 	end
 
 	function instance:FireAllClients(...)
@@ -139,7 +146,7 @@ function RemoteBridge.BindEvent(instance, datamodel, reliable)
 		return service and service:SendEvent(EVENT_CHANNEL, {
 			remoteId = getRemoteId(self),
 			arguments = packArguments(service, ...),
-		}, reliable) or false
+		}, reliability()) or false
 	end
 
 	-- Compatibility with older Kinemium scripts.

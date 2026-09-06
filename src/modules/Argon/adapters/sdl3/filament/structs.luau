@@ -17,6 +17,7 @@ local KineFilamentDrawItem = ffi.struct({
 	{ materialKind = ffi.types.i32 },
 	{ flags = ffi.types.u32 },
 	{ reserved = ffi.types.u32 },
+	{ shader = ffi.types.pointer },
 })
 
 return {

@@ -1,6 +1,17 @@
 local Studio = game:GetService("Studio")
 local StudioThemeService = game:GetService("StudioThemeService")
 local Immco = require("@Immco")
+local topbarModules = require("@StudioTopbar")
+local categoryDefinitions = topbarModules.categories
+local topbarActions = topbarModules.actions({
+	game = game,
+	Instance = Instance,
+	Color3 = Color3,
+	CFrame = CFrame,
+	Enum = Enum,
+	ishared = ishared,
+	warn = warn,
+})
 local theme = StudioThemeService.SelectedTheme
 local Argon = require("@Argon")
 local retained = {}
@@ -15,7 +26,7 @@ end
 
 repeat
 	task.wait()
-until game.CoreGui:FindFirstChild("Studio")
+until game.CoreGui:FindFirstChild("Studio") and ishared.StudioSystem
 
 local Topbar = Instance.new("Frame")
 Topbar.Name = "Topbar"
@@ -25,157 +36,119 @@ Topbar.Parent = game.CoreGui:FindFirstChild("Studio")
 Topbar.BackgroundTransparency = 1
 
 local icon = Argon:CreateImageFromPath("./src/assets/images/kinemium/KinemiumWhite.png")
-local PlaytestService = game:GetService("PlaytestService")
-local NetworkService = game:GetService("NetworkService")
 
-local buttonCategories = {
+local function runAction(action)
+	local arguments = action.arguments or {}
+
+	if action.type == "studio-route" then
+		ishared.StudioSystem:Fire(action.route, table.unpack(arguments))
+		return
+	end
+
+	if action.type == "service-method" then
+		local service = game:GetService(action.service)
+		local method = service and service[action.method]
+		if type(method) == "function" then
+			method(service, table.unpack(arguments))
+		end
+		return
+	end
+
+	if action.type == "topbar-command" then
+		topbarActions.run(action)
+	end
+end
+
+local function makeButton(definition)
+	if definition.type == "separator" then
+		return {
+			type = "separator",
+		}
+	end
+
+	local button = {}
+
+	for key, value in pairs(definition) do
+		button[key] = value
+	end
+
+	if definition.iconPath then
+		button.icon = Argon:CreateImageFromPath(definition.iconPath)
+	end
+
+	if definition.action then
+		button.callback = function()
+			runAction(definition.action)
+		end
+	end
+
+	return button
+end
+
+local function makeCategory(definition)
+	local buttons = {}
+	for _, buttonDefinition in ipairs(definition.buttons or {}) do
+		table.insert(buttons, makeButton(buttonDefinition))
+	end
+
+	return {
+		name = definition.name,
+		type = definition.type or "category",
+		buttons = buttons,
+		callback = definition.callback,
+	}
+end
+
+local toolbarCategories = {}
+for _, definition in ipairs(categoryDefinitions) do
+	table.insert(toolbarCategories, makeCategory(definition))
+end
+
+ishared.buttonCategories = {
 	{
 		name = "Engine",
-		buttons = {
-			{
-				name = "File",
-				type = "button",
-				callback = function()
-					print("Play")
-				end,
-			},
-			{
-				name = "Game",
-				type = "button",
-				callback = function()
-					print("Stop")
-				end,
-			},
-			{
-				name = "Projects",
-				type = "button",
-				callback = function()
-					print("Settings")
-				end,
-			},
-		},
+		buttons = {},
 	},
-
 	{
-		name = "Home",
-		buttons = {
-			{
-				name = "Collaboration",
-				type = "category",
-				buttons = {
-					{
-						name = "Host & Copy Invite",
-						tooltip = "Host this project and copy an authenticated invite code",
-						icon = "",
-						callback = function()
-							local invite, reason = NetworkService:HostCollaboration({
-								InviteAddress = GetFlagValue("invite-address") or "127.0.0.1",
-								Port = tonumber(GetFlagValue("port")) or 1234,
-							})
-							if invite then
-								Argon:SetClipboard(invite.Code)
-								print("Collaboration invite copied: " .. invite.Code)
-							else
-								warn("Could not host collaboration: " .. tostring(reason))
-							end
-						end,
-					},
-					{
-						name = "Join From Clipboard",
-						tooltip = "Join the collaboration invite currently on the clipboard",
-						icon = "",
-
-						callback = function()
-							local active, reason = NetworkService:JoinCollaboration(
-								Argon:GetClipboard(),
-								GetFlagValue("username") or "Collaborator"
-							)
-							if not active then
-								warn("Could not join collaboration: " .. tostring(reason))
-							end
-						end,
-					},
-					{
-						name = "Stop Collaboration",
-						icon = "",
-
-						callback = function()
-							NetworkService:StopCollaboration()
-						end,
-					},
-				},
-			},
-			{
-				name = "Test",
-				type = "category",
-				buttons = {
-					{
-						name = "Run Client",
-						icon = "path",
-						tooltip = "Run a new playtest on the client",
-						callback = function() end,
-					},
-
-					{
-						name = "Run Server",
-						icon = "path",
-						callback = function()
-							print("Overview")
-						end,
-					},
-
-					{
-						name = "Machine Playtest",
-						icon = "path",
-						callback = function()
-							PlaytestService.CreatePlaytestAsync("game")
-						end,
-					},
-				},
-				callback = function()
-					print("Overview")
-				end,
-			},
-			{
-				name = "Plugins",
-				type = "category",
-				buttons = {},
-				callback = function()
-					print("Projects")
-				end,
-			},
-			{
-				name = "View",
-				type = "category",
-				buttons = {
-					{
-						name = "Test",
-						icon = "path",
-						callback = function()
-							print("Overview")
-						end,
-					},
-				},
-				callback = function()
-					print("Projects")
-				end,
-			},
-		},
+		name = "Toolbar",
+		buttons = toolbarCategories,
 	},
 }
 
-local pluginCategory
-for _, category in ipairs(buttonCategories) do
-	for _, button in ipairs(category.buttons) do
-		if button.name == "Plugins" and button.type == "category" then
-			pluginCategory = button
-			break
+ishared.EngineTopbar = {
+	AddCategory = function(categoryName: string, buttons: { any })
+		if not categoryName or type(categoryName) ~= "string" then
+			return
 		end
+		if not buttons or type(buttons) ~= "table" then
+			return
+		end
+
+		table.insert(toolbarCategories, {
+			name = categoryName,
+			type = "category",
+			buttons = (function()
+				local builtButtons = {}
+				for _, button in ipairs(buttons) do
+					table.insert(builtButtons, makeButton(button))
+				end
+				return builtButtons
+			end)(),
+		})
+	end,
+}
+
+local pluginCategory
+for _, category in ipairs(toolbarCategories) do
+	if category.name == "Plugins" then
+		pluginCategory = category
+		break
 	end
 end
 
 local pluginButtons = {}
 local pluginGroups = {}
+
 game.EngineSignal:Connect(function(route, target, payload)
 	if target ~= "Plugins" or type(payload) ~= "table" or not pluginCategory then
 		return
@@ -261,9 +234,54 @@ local function layoutGrid(
 	return rects
 end
 
-local expandedHeight = 200
+local function layoutToolbarItems(
+	x: number,
+	y: number,
+	containerWidth: number,
+	items: { any },
+	itemWidth: number,
+	itemHeight: number,
+	spacingX: number,
+	spacingY: number
+)
+	local rects = {}
 
-local selectedCategory = buttonCategories[2].buttons[1]
+	local currentX = x
+	local currentY = y
+
+	local separatorWidth = 1
+	local separatorPadding = 6
+
+	for index, item in ipairs(items) do
+		local width
+
+		if item.type == "separator" then
+			width = separatorWidth + separatorPadding * 2
+		else
+			width = item.width or itemWidth
+		end
+
+		if currentX > x and currentX + width > x + containerWidth then
+			currentX = x
+			currentY += itemHeight + spacingY
+		end
+
+		rects[index] = {
+			x = currentX,
+			y = currentY,
+			width = width,
+			height = itemHeight,
+		}
+
+		currentX += width + spacingX
+	end
+
+	return rects
+end
+
+local expandedHeight = 145
+
+local selectedCategory = toolbarCategories[1]
 
 renderer.Pool.new("2da", function(lib)
 	local absolutePosition = Topbar.AbsolutePosition
@@ -345,20 +363,53 @@ renderer.Pool.new("2da", function(lib)
 			end
 		end
 
-		local gridPadding = 8
-		local itemWidth = 80
-		local itemHeight = expandedHeight - 60
-		local itemSpacing = 8
+		local gridPadding = 6
+		local itemWidth = 64
+		local itemHeight = 80
+		local itemSpacing = 4
 
 		local gridX = insideRect.x + gridPadding
 		local gridY = insideRect.y + gridPadding
 		local gridWidth = insideRect.width - gridPadding * 2
 
 		local flyoutRects =
-			layoutGrid(gridX, gridY, gridWidth, itemWidth, itemHeight, itemSpacing, itemSpacing, #flyoutButtons)
+			layoutToolbarItems(gridX, gridY, gridWidth, flyoutButtons, itemWidth, itemHeight, itemSpacing, itemSpacing)
 
 		for index, category_button in ipairs(flyoutButtons) do
 			local rect = flyoutRects[index]
+
+			if category_button.type == "separator" then
+				Argon:DrawRectangle(renderer.Window, {
+					x = rect.x + math.floor(rect.width / 2),
+					y = rect.y + 5,
+					width = 1,
+					height = rect.height - 10,
+					Color = Argon:RGBA(70, 70, 70),
+				})
+
+				continue
+			end
+
+			if type(category_button.render) == "function" then
+				category_button.render({
+					rect = rect,
+
+					button = category_button,
+
+					renderer = renderer,
+					window = renderer.Window,
+
+					theme = theme,
+					retained = retained,
+					dt = dt,
+
+					Immco = Immco,
+					Argon = Argon,
+				})
+
+				continue
+			end
+
 			local isHovered = renderer:isMouseInRect(rect)
 
 			Immco.TopbarButton({
@@ -366,13 +417,14 @@ renderer.Pool.new("2da", function(lib)
 				y = rect.y,
 				width = rect.width,
 				height = rect.height,
-
 				Image = category_button.icon,
 				text = category_button.name,
-
+				imageWidth = 43,
+				imageHeight = 43,
+				padding = 3,
+				TextSize = 11,
 				Color = isHovered and theme.ThirdColor or theme.BgColor,
 				TextColor = theme.SecondaryTextColor,
-
 				theme = theme,
 				engine_window = renderer.Window,
 			}, dt)
@@ -380,15 +432,13 @@ renderer.Pool.new("2da", function(lib)
 			if category_button.tooltip then
 				Immco.Tooltip({
 					RetainedStorage = retained,
-					id = category_button.icon,
+					id = category_button.icon or category_button.name,
 					renderer = renderer,
 					canvas = renderer.Window,
 					window = renderer.Window,
 					theme = theme,
-
 					HoverRect = rect,
 					Text = category_button.tooltip,
-
 					HoverDelay = 0.4,
 					FadeSpeed = 14,
 					Placement = "below",
@@ -399,6 +449,7 @@ renderer.Pool.new("2da", function(lib)
 					CornerRadius = 6,
 				}, dt)
 			end
+
 			if renderer:HasClicked(rect) and selectedCategory then
 				if category_button.callback then
 					category_button.callback(category_button, rect)
@@ -409,8 +460,8 @@ renderer.Pool.new("2da", function(lib)
 
 	Argon:Restore(renderer.Window)
 
-	local engineCategory = buttonCategories[1]
-	local toolbarCategory = buttonCategories[2]
+	local engineCategory = ishared.buttonCategories[1]
+	local toolbarCategory = ishared.buttonCategories[2]
 
 	--
 	-- Engine buttons: File / Game / Projects
@@ -524,10 +575,19 @@ renderer.Pool.new("2da", function(lib)
 
 			for _, category in ipairs(toolbarCategory.buttons) do
 				if category.name == value then
-					selectedCategory = category
-
-					if category.callback then
-						category.callback()
+					if category.type == "button" then
+						selectedCategory = nil
+						if retained["toolbar-tabs"] then
+							retained["toolbar-tabs"].value = nil
+						end
+						if category.callback then
+							category.callback()
+						end
+					else
+						selectedCategory = category
+						if category.callback then
+							category.callback()
+						end
 					end
 
 					break
@@ -535,4 +595,4 @@ renderer.Pool.new("2da", function(lib)
 			end
 		end,
 	}, dt)
-end)
+end, 10000)

@@ -4,6 +4,7 @@ export type InstanceObject = { [string]: any }
 local Instance = {}
 local InstanceLifecycle = require("../../engine/ffi/InstanceLifecycle")
 local Signal = require("@Kinemium.signal")
+local Enum = require("@EnumMap")
 local task = _G.zune.task
 local nextUniqueId = 1
 local cloneInitializer: ((InstanceObject, InstanceObject) -> ())? = nil
@@ -264,6 +265,8 @@ function Instance.new(className: string): InstanceObject
 		UniqueId = generateUniqueId(),
 		NetworkOwner = nil,
 		NetworkOwnerType = 0,
+		ReplicationMode = Enum.ReplicationMode.Automatic,
+		ReplicationGroup = "",
 	}
 
 	setmetatable(self, instance_mt)

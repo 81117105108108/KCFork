@@ -38,17 +38,17 @@ local function getFaceCFrame(cf, size, face)
 	local padding = 0.005 -- offset to prevent Z-fighting
 
 	if face == Enum.NormalId.Front then
-		return cf * CFrame.new(0, 0, -half.Z - padding) * CFrame.Angles(math.rad(90), math.rad(180), 0)
+		return cf * CFrame.new(0, 0, -half.Z - padding) * CFrame.Angles(math.rad(-90), 0, 0)
 	elseif face == Enum.NormalId.Back then
-		return cf * CFrame.new(0, 0, half.Z + padding) * CFrame.Angles(math.rad(90), math.rad(180), 0)
+		return cf * CFrame.new(0, 0, half.Z + padding) * CFrame.Angles(math.rad(90), 0, 0)
 	elseif face == Enum.NormalId.Left then
-		return cf * CFrame.new(-half.X - padding, 0, 0) * CFrame.Angles(0, math.rad(-90), math.rad(90))
+		return cf * CFrame.new(-half.X - padding, 0, 0) * CFrame.Angles(0, 0, math.rad(90))
 	elseif face == Enum.NormalId.Right then
-		return cf * CFrame.new(half.X + padding, 0, 0) * CFrame.Angles(0, math.rad(-90), math.rad(90))
+		return cf * CFrame.new(half.X + padding, 0, 0) * CFrame.Angles(0, 0, math.rad(-90))
 	elseif face == Enum.NormalId.Top then
-		return cf * CFrame.new(0, half.Y + padding, 0) * CFrame.Angles(math.rad(180), 0, 0)
+		return cf * CFrame.new(0, half.Y + padding, 0)
 	elseif face == Enum.NormalId.Bottom then
-		return cf * CFrame.new(0, -half.Y - padding, 0) * CFrame.Angles(math.rad(-180), 0, 0)
+		return cf * CFrame.new(0, -half.Y - padding, 0) * CFrame.Angles(math.rad(180), 0, 0)
 	end
 	return cf
 end

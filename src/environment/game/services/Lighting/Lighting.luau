@@ -20,32 +20,23 @@ for i = 1, STAR_COUNT do
 	})
 end
 
-local function getDayAlpha(clockTime)
-	return (clockTime % 24) / 24
-end
-
 local function calculateSunDirection(time, latitude)
-	latitude = math.rad(latitude)
-	local declination = math.rad(23.45 * math.sin(math.rad(360 * (284 + time * 15) / 365)))
-	local hourAngle = math.rad(15 * (time - 12))
-
-	local elevation = math.asin(
-		math.sin(latitude) * math.sin(declination) + math.cos(latitude) * math.cos(declination) * math.cos(hourAngle)
-	)
-	local azimuth = math.atan2(
-		math.sin(hourAngle),
-		math.cos(hourAngle) * math.sin(latitude) - math.tan(declination) * math.cos(latitude)
-	)
-
+	local solarAngle = ((time % 24) - 6) / 24 * math.pi * 2
+	local latitudeAngle = math.rad(math.clamp(latitude, -90, 90))
 	return Vector3.new(
-		math.cos(azimuth) * math.cos(elevation),
-		math.sin(elevation),
-		math.sin(azimuth) * math.cos(elevation)
-	)
+		-math.cos(solarAngle),
+		math.sin(solarAngle) * math.cos(latitudeAngle),
+		math.sin(solarAngle) * math.sin(latitudeAngle)
+	):Unit()
 end
 
 function Lighting:GetSunDirection()
 	return calculateSunDirection(self.ClockTime, self.GeographicLatitude)
+end
+
+function Lighting:GetDaylight()
+	local elevation = self:GetSunDirection().Y
+	return math.clamp((elevation + 0.12) / 0.3, 0, 1)
 end
 
 Lighting.InitRenderer = function(renderer, renderer_signal, datamodel)
@@ -57,8 +48,8 @@ Lighting.InitRenderer = function(renderer, renderer_signal, datamodel)
 		Ambient = Color3.fromRGB(105, 120, 145),
 		Brightness = 2.0,
 
-		ColorShift_Top = Color3.fromRGB(235, 245, 255),
-		ColorShift_Bottom = Color3.fromRGB(180, 205, 235),
+		ColorShift_Top = Color3.fromRGB(16, 48, 150),
+		ColorShift_Bottom = Color3.fromRGB(75, 160, 235),
 
 		OutdoorAmbient = Color3.fromRGB(125, 140, 165),
 
@@ -66,109 +57,92 @@ Lighting.InitRenderer = function(renderer, renderer_signal, datamodel)
 		ClockTime = 14.0,
 		GeographicLatitude = 0.0,
 		EnableDayCycle = false,
+		DayCycleSpeed = 1.0,
 		GraphicsPreset = Enum.KinemiumGraphicsPreset.Medium,
-
-		GetDaylight = function()
-			local t = getDayAlpha(Lighting.ClockTime)
-			return t
-		end,
 	})
 	Lighting._Intents = Enum.PluginIntents.Graphics
 
+	local lightingProperties = {
+		Ambient = true,
+		Brightness = true,
+		ColorShift_Top = true,
+		ColorShift_Bottom = true,
+		OutdoorAmbient = true,
+		ClockTime = true,
+		GeographicLatitude = true,
+	}
+
+	local updateLighting
 	Lighting.Changed:Connect(function(property)
 		if property == "GraphicsPreset" then
-			print("Changed preset")
 			local val = Lighting.GraphicsPreset.Value
 			argon:SetPostProcessingPreset(renderer.Window, val)
+		elseif property == "GlobalShadows" then
+			argon:SetShadowOptions(renderer.Window, Lighting.GlobalShadows == true, "pcf")
+		elseif lightingProperties[property] and updateLighting then
+			updateLighting()
 		end
 	end)
 	argon:SetPostProcessingPreset(renderer.Window, "medium")
+	argon:SetShadowOptions(renderer.Window, Lighting.GlobalShadows == true, "pcf")
 
-	local FilamentContext = renderer.FilamentContext
-	local Filament = renderer.Filament
-
-	local function UpdateLighting()
-		local ambientR, ambientG, ambientB = Lighting.Ambient:ToRGB()
-
-		local outdoorR, outdoorG, outdoorB = Lighting.OutdoorAmbient:ToRGB()
-
-		local topR, topG, topB = Lighting.ColorShift_Top:ToRGB()
-
-		local bottomR, bottomG, bottomB = Lighting.ColorShift_Bottom:ToRGB()
-
+	updateLighting = function()
+		local ambient = Lighting.Ambient
+		local outdoor = Lighting.OutdoorAmbient
+		local top = Lighting.ColorShift_Top
+		local bottom = Lighting.ColorShift_Bottom
 		local daylight = Lighting:GetDaylight()
+		local sunset = math.clamp(1 - math.abs(Lighting:GetSunDirection().Y) * 5, 0, 1) * (1 - daylight * 0.35)
+		local nightTop = Color3.fromRGB(4, 7, 20)
+		local nightHorizon = Color3.fromRGB(12, 18, 38)
+		local sky = nightTop:Lerp(top, daylight)
+		local horizon = nightHorizon:Lerp(bottom, daylight)
+		horizon = Color3.new(
+			math.clamp(horizon.R + sunset * 0.32, 0, 1),
+			math.clamp(horizon.G + sunset * 0.11, 0, 1),
+			horizon.B
+		)
+		local ground = ambient:Lerp(outdoor, daylight * 0.35)
 
-		local sunAngle = math.rad((Lighting.ClockTime - 12) * 15)
-
-		local latitude = math.rad(Lighting.GeographicLatitude)
-
-		local sunDirX = math.cos(sunAngle)
-		local sunDirY = math.sin(latitude)
-		local sunDirZ = math.sin(sunAngle)
-
-		local length = math.sqrt(sunDirX * sunDirX + sunDirY * sunDirY + sunDirZ * sunDirZ)
-
-		sunDirX /= length
-		sunDirY /= length
-		sunDirZ /= length
-
-		local sunIntensity = Lighting.Brightness * 50000
-
-		local skyR = math.clamp(topR * daylight + outdoorR * (1 - daylight), 0, 1)
-		local skyG = math.clamp(topG * daylight + outdoorG * (1 - daylight), 0, 1)
-		local skyB = math.clamp(topB * daylight + outdoorB * (1 - daylight), 0, 1)
-
-		local horizonR = math.clamp(bottomR * daylight + ambientR * (1 - daylight), 0, 1)
-		local horizonG = math.clamp(bottomG * daylight + ambientG * (1 - daylight), 0, 1)
-		local horizonB = math.clamp(bottomB * daylight + ambientB * (1 - daylight), 0, 1)
-
-		Filament.lib.Kine_Filament_SetSkyAtmosphere(
-			FilamentContext,
-
-			-- sun direction
-			sunDirX,
-			sunDirY,
-			sunDirZ,
-
-			-- sky
-			skyR,
-			skyG,
-			skyB,
-
-			-- horizon
-			horizonR,
-			horizonG,
-			horizonB,
-
-			-- ground
-			ambientR,
-			ambientG,
-			ambientB,
-
-			-- sun intensity
-			sunIntensity
+		local sunDirection = Lighting:GetSunDirection()
+		argon:SetSkyAtmosphere(
+			renderer.Window,
+			argon:Vector3(sunDirection.X, sunDirection.Y, sunDirection.Z),
+			argon:RGBA(sky.R * 255, sky.G * 255, sky.B * 255),
+			argon:RGBA(horizon.R * 255, horizon.G * 255, horizon.B * 255),
+			argon:RGBA(ground.R * 255, ground.G * 255, ground.B * 255),
+			math.max(0, Lighting.Brightness) * 50000
 		)
 	end
 
-	--renderer.Hook.new("Renderstep", UpdateLighting)
+	updateLighting()
 
-	argon:SetSkyAtmosphere(
-		renderer.Window,
-		argon:Vector3(-0.45, 0.80, -0.35),
-		argon:RGBA(77, 122, 230),
-		argon:RGBA(191, 214, 245),
-		argon:RGBA(46, 51, 61),
-		80000
-	)
 	argon:SetSunRays(renderer.Window, true, {
-		Distance = 4,
+		Distance = 0.3,
 		CutOffDistance = 1000,
-		MaximumOpacity = 0.58,
+		MaximumOpacity = 0.2,
 		HeightFalloff = 0.018,
 		Density = 0.014,
-		InScatteringSize = 34,
-		Color = argon:RGBA(199, 214, 237),
+		InScatteringSize = 3,
+		Color = argon:RGBA(55, 55, 55),
 	})
+
+	argon:SetScreenSpaceReflections(renderer.Window, true)
+
+	local cycleAccumulator = 0
+	renderer.Hook.new("Renderstep", function(deltaTime)
+		if Lighting.EnableDayCycle ~= true then
+			cycleAccumulator = 0
+			return
+		end
+		cycleAccumulator += math.max(0, tonumber(deltaTime) or 0)
+		if cycleAccumulator < 0.1 then
+			return
+		end
+		local elapsed = cycleAccumulator
+		cycleAccumulator = 0
+		Lighting.ClockTime = (Lighting.ClockTime + elapsed * (tonumber(Lighting.DayCycleSpeed) or 1) / 60) % 24
+	end)
 end
 
 return Lighting

@@ -15,6 +15,7 @@ export type Fns = {
 	Kine_VulkanCompositor_BeginFrame: (compositor: FFIPointer) -> FFIPointer,
 	Kine_VulkanCompositor_BeginOverlay: (compositor: FFIPointer) -> FFIPointer,
 	Kine_VulkanCompositor_EndFrame: (compositor: FFIPointer) -> int,
+	Kine_VulkanCompositor_Resize: (compositor: FFIPointer, width: int, height: int) -> int,
 }
 
 local funcs = {
@@ -29,6 +30,10 @@ local funcs = {
 	Kine_VulkanCompositor_IsReady = {
 		returns = ffi.types.i32,
 		args = { ffi.types.pointer },
+	},
+	Kine_VulkanCompositor_Resize = {
+		returns = ffi.types.i32,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.i32 },
 	},
 	Kine_VulkanCompositor_GetLastError = {
 		returns = ffi.types.pointer,

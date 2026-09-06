@@ -10,6 +10,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Body/Body.h>
@@ -594,6 +595,23 @@ JPH_ShapeRef JPH_BoxShape_Create(const JPH_Vec3* halfExtent, float convexRadius)
 JPH_ShapeRef JPH_SphereShape_Create(float radius)
 {
     JPH::SphereShapeSettings settings(radius);
+    JPH::ShapeSettings::ShapeResult result = settings.Create();
+
+    if (result.HasError())
+        return nullptr;
+
+    JPH::Shape* shape = result.Get().GetPtr();
+    shape->AddRef();
+    return shape;
+}
+
+JPH_ShapeRef JPH_CylinderShape_Create(float halfHeight, float radius, float convexRadius)
+{
+    if (halfHeight <= 0.0f || radius <= 0.0f)
+        return nullptr;
+
+    const float clampedConvexRadius = std::max(0.0f, std::min(convexRadius, std::min(halfHeight, radius)));
+    JPH::CylinderShapeSettings settings(halfHeight, radius, clampedConvexRadius);
     JPH::ShapeSettings::ShapeResult result = settings.Create();
 
     if (result.HasError())

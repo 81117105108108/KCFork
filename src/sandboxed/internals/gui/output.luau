@@ -37,7 +37,7 @@ Output.BackgroundTransparency = 1
 
 local tabs = {
 	{ title = "Output" },
-	{ title = "Threads" },
+	{ title = "Debugger" },
 	{ title = "Stack Trace" },
 	{ title = "Profiler" },
 }
@@ -45,6 +45,7 @@ local activeTab = 1
 local search = ""
 local contentHeight = 0
 local expandedThread = nil
+local selectedThreadId = nil
 local lastMousePressed = false
 
 local THREAD_ROW_H = 28
@@ -86,13 +87,25 @@ local function threads()
 			for id, entry in pairs(activeMap) do
 				local idStr = tostring(id)
 				seen[idStr] = true
-				table.insert(result, { id = idStr, thread = entry.thread, status = threadStatus(entry.thread, idStr) })
+				table.insert(result, {
+					id = idStr,
+					thread = entry.thread,
+					status = threadStatus(entry.thread, idStr),
+					source = "kilang",
+					runtimeId = id,
+				})
 			end
 		elseif targetKilang.threads then
 			for id, thread in pairs(targetKilang.threads) do
 				local idStr = tostring(id)
 				seen[idStr] = true
-				table.insert(result, { id = idStr, thread = thread, status = threadStatus(thread, idStr) })
+				table.insert(result, {
+					id = idStr,
+					thread = thread,
+					status = threadStatus(thread, idStr),
+					source = "kilang",
+					runtimeId = id,
+				})
 			end
 		end
 	end
@@ -110,7 +123,14 @@ local function threads()
 								seen[idStr] = true
 								table.insert(
 									result,
-									{ id = idStr, thread = thread, status = threadStatus(thread, idStr) }
+									{
+										id = idStr,
+										thread = thread,
+										status = threadStatus(thread, idStr),
+										source = "script",
+										language = lang,
+										uniqueId = uniqueId,
+									}
 								)
 							end
 						end
@@ -254,12 +274,20 @@ end
 
 local function drawThreads(params, dt)
 	local threadList = threads()
+	local selectedEntry = nil
+	for _, entry in ipairs(threadList) do
+		if entry.id == selectedThreadId then
+			selectedEntry = entry
+			break
+		end
+	end
 	local font = Argon:CreateFont(theme.Font)
 	local mousePos = Argon:GetMousePosition()
 	local mousePressed = Argon:IsMouseButtonPressed(1)
 	local justPressed = mousePressed and not lastMousePressed
 	lastMousePressed = mousePressed
 
+	local controlHeight = 42
 	local innerX = params.x + 8
 	local innerW = params.width - 16
 	local col1w = math.max(100, innerW - 130)
@@ -280,13 +308,49 @@ local function drawThreads(params, dt)
 		totalH += THREAD_ROW_H
 	end
 
+	local function debuggerButton(rect, label, enabled, callback)
+		Immco.TextButton({
+			x = rect.x, y = rect.y, width = rect.width, height = rect.height,
+			text = label,
+			Color = if enabled
+				then (renderer:isMouseInRect(rect) and theme.ThirdColor or theme.SecondaryColor)
+				else theme.BgColor,
+			TextColor = enabled and theme.TextColor or theme.SecondaryTextColor,
+			BgVisible = true, theme = theme, engine_window = renderer.Window,
+		}, dt)
+		if enabled and renderer:HasClicked(rect) then
+			callback()
+		end
+	end
+
+	debuggerButton({ x = params.x + 8, y = params.y + 4, width = 112, height = 32 }, "Stop Thread", selectedEntry ~= nil, function()
+		if selectedEntry.source == "script" then
+			local ScriptContext = game:GetService("ScriptContext")
+			ScriptContext.KillThread(selectedEntry.uniqueId, Enum.Language[selectedEntry.language])
+		elseif kilang and kilang.remove then
+			kilang:remove(selectedEntry.runtimeId)
+		end
+		selectedThreadId = nil
+		expandedThread = nil
+	end)
+	debuggerButton({ x = params.x + 128, y = params.y + 4, width = 112, height = 32 }, "Copy Stack", selectedEntry ~= nil, function()
+		Argon:SetClipboard(stackTrace(selectedEntry.thread))
+	end)
+	Immco.Text({
+		x = params.x + 252, y = params.y + 14,
+		TextSize = 12, Font = font,
+		text = selectedEntry and selectedEntry.id or "Select a thread to inspect it",
+		Color = theme.SecondaryTextColor,
+		engine_window = renderer.Window, theme = theme,
+	}, dt)
+
 	Immco.Scroller({
 		id = "output-threads",
 		x = params.x,
-		y = params.y,
+		y = params.y + controlHeight,
 		width = params.width,
-		height = params.height,
-		ViewHeight = params.height,
+		height = params.height - controlHeight,
+		ViewHeight = params.height - controlHeight,
 		ContentHeight = totalH + 10,
 		ScrollSpeed = 50,
 		ScrollLerpSpeed = 20,
@@ -360,6 +424,7 @@ local function drawThreads(params, dt)
 
 				-- edge-triggered toggle on click
 				if justPressed and isHovered then
+					selectedThreadId = entry.id
 					if isExpanded then
 						expandedThread = nil
 					else
@@ -472,6 +537,14 @@ local function drawThreads(params, dt)
 			end
 		end,
 	}, dt)
+end
+
+if ishared.StudioSystem then
+	ishared.StudioSystem:Connect(function(route)
+		if route == "show_debugger" then
+			activeTab = 2
+		end
+	end)
 end
 
 local function drawStackTraces(params, dt)

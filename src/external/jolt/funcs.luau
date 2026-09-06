@@ -85,6 +85,10 @@ local JPH_BoxShape_Create = { returns = ptr, args = { ptr, f32 } }
 -- JPH_ShapeRef JPH_SphereShape_Create(float radius)
 local JPH_SphereShape_Create = { returns = ptr, args = { f32 } }
 
+-- JPH_ShapeRef JPH_CylinderShape_Create(float halfHeight, float radius,
+--                                       float convexRadius)
+local JPH_CylinderShape_Create = { returns = ptr, args = { f32, f32, f32 } }
+
 -- JPH_ShapeRef JPH_ConvexHullShape_Create(
 --   const JPH_Vec3* points, uint32_t pointCount, float maxConvexRadius)
 local JPH_ConvexHullShape_Create = { returns = ptr, args = { ptr, u32, f32 } }
@@ -379,6 +383,7 @@ return {
 	-- Shapes
 	JPH_BoxShape_Create = JPH_BoxShape_Create,
 	JPH_SphereShape_Create = JPH_SphereShape_Create,
+	JPH_CylinderShape_Create = JPH_CylinderShape_Create,
 	JPH_ConvexHullShape_Create = JPH_ConvexHullShape_Create,
 	JPH_MeshShape_Create = JPH_MeshShape_Create,
 	JPH_Shape_Destroy = JPH_Shape_Destroy,
