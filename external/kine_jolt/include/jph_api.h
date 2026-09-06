@@ -430,6 +430,15 @@ JPH_API void JPH_BodyInterface_GetPositionAndRotation(
 );
 
 JPH_API void JPH_BodyInterface_GetRotation(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, JPH_Quat* outRotation);
+
+// Bulk marshal: fills outBuffer with [BodyID:u32, Px:f32, Py:f32, Pz:f32, Qx:f32, Qy:f32, Qz:f32, Qw:f32]*count (32 bytes stride). Returns bodies written.
+JPH_API uint32_t JPH_BodyInterface_GetBulkTransforms(
+    JPH_BodyInterfaceRef bodyInterface,
+    const JPH_BodyID* ids,
+    uint32_t count,
+    void* outBuffer,
+    uint32_t outCapacityBytes
+);
 JPH_API void JPH_BodyInterface_GetLinearVelocity(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, JPH_Vec3* outVelocity);
 JPH_API void JPH_BodyInterface_GetAngularVelocity(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, JPH_Vec3* outVelocity);
 

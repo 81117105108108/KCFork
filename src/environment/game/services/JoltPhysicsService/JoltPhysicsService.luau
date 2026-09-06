@@ -39,6 +39,43 @@ local tempCharacterGravity = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3
 local tempCharacterPosition = ffi.alloc(structs.JPH_RVec3:size(), structs.JPH_RVec3:alignment())
 local tempCharacterOutputVelocity = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
 
+-- Bulk transform marshaling (Phase 1): single FFI fills [BodyID:u32, Px:f32, Py:f32, Pz:f32, Qx:f32, Qy:f32, Qz:f32, Qw:f32]*N (32B stride).
+local BULK_STRIDE = 32
+local bulkIdsBuffer: buffer? = nil
+local bulkOutBuffer: buffer? = nil
+local bulkCapacity = 0
+local bulkParts: { any } = {}
+
+local function ensureBulkCapacity(n: number)
+	if n <= bulkCapacity and bulkIdsBuffer ~= nil and bulkOutBuffer ~= nil then
+		return
+	end
+	local cap = math.max(n, 64)
+	bulkIdsBuffer = ffi.alloc(cap * 4, 4)
+	bulkOutBuffer = ffi.alloc(cap * BULK_STRIDE, 4)
+	bulkCapacity = cap
+end
+
+local function bulkTransformToCFrame(posX: number, posY: number, posZ: number, qx: number, qy: number, qz: number, qw: number): CFrame
+	local qlen = qx * qx + qy * qy + qz * qz + qw * qw
+	if qlen > 1e-12 and math.abs(qlen - 1) > 1e-6 then
+		local invLen = 1 / math.sqrt(qlen)
+		qx, qy, qz, qw = qx * invLen, qy * invLen, qz * invLen, qw * invLen
+	end
+	local xx, yy, zz = qx * qx, qy * qy, qz * qz
+	local xy, xz, yz = qx * qy, qx * qz, qy * qz
+	local wx, wy, wz = qw * qx, qw * qy, qw * qz
+	local f = math.floor
+	return CFrame.new(
+		f(posX * 1000 + 0.5) * 0.001,
+		f(posY * 1000 + 0.5) * 0.001,
+		f(posZ * 1000 + 0.5) * 0.001,
+		1 - 2 * (yy + zz), 2 * (xy - wz), 2 * (xz + wy),
+		2 * (xy + wz), 1 - 2 * (xx + zz), 2 * (yz - wx),
+		2 * (xz - wy), 2 * (yz + wx), 1 - 2 * (xx + yy)
+	)
+end
+
 local terrainBodies = {} -- chunkKey -> BodyID
 local terrainBodyMaterials = {} -- BodyID -> dominant terrain material
 
@@ -2316,6 +2353,83 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 
 				local _syncStart = os.clock()
 				local _nSimulated = 0
+				-- Phase 1 bulk path: one FFI fills contiguous [BodyID u32 + Pxyz f32 + Qxyzw f32]*N.
+				local bulkOk = false
+				if lib.JPH_BodyInterface_GetBulkTransforms ~= nil then
+					local count = 0
+					for part, bodyID in pairs(movingBodiesMap) do
+						if part.Parent ~= nil then
+							count += 1
+						end
+					end
+					if count > 0 then
+						ensureBulkCapacity(count)
+						local idsBuf = bulkIdsBuffer :: buffer
+						local outBuf = bulkOutBuffer :: buffer
+						table.clear(bulkParts)
+						local idx = 0
+						for part, bodyID in pairs(movingBodiesMap) do
+							if part.Parent ~= nil then
+								idsBuf:writeu32(idx * 4, bodyID)
+								bulkParts[idx + 1] = part
+								idx += 1
+							end
+						end
+						local ok, written = pcall(lib.JPH_BodyInterface_GetBulkTransforms, bodyInterface, idsBuf, idx, outBuf, idx * BULK_STRIDE)
+						if ok and type(written) == "number" and written > 0 then
+							bulkOk = true
+							for i = 0, written - 1 do
+								local base = i * BULK_STRIDE
+								local rowBodyID = outBuf:readu32(base)
+								local part = bulkParts[i + 1]
+								-- Guard against stale index alignment: fall back to inverseMap.
+								if part == nil or bodiesMap[part] ~= rowBodyID then
+									part = inverseMap[rowBodyID]
+								end
+								if part == nil or part.Parent == nil or part.Anchored then
+									continue
+								end
+								_nSimulated += 1
+								local cf = bulkTransformToCFrame(
+									outBuf:readf32(base + 4), outBuf:readf32(base + 8), outBuf:readf32(base + 12),
+									outBuf:readf32(base + 16), outBuf:readf32(base + 20), outBuf:readf32(base + 24), outBuf:readf32(base + 28)
+								)
+								local currentCFrame = part.CFrame
+								local transformChanged = not currentCFrame or not currentCFrame:IsSameTransform(cf, 1e-4)
+								if transformChanged then
+									part.CFrame = cf
+									-- Preserve velocity behavior: fetch only when the transform moved.
+									local _, linear, angular = CalculateBodyPhysics(part, bodyInterface, rowBodyID, true)
+									if linear then
+										local currentLinear = part.AssemblyLinearVelocity
+										if not currentLinear or currentLinear:DistanceSquared(linear) > 1e-8 then
+											part.AssemblyLinearVelocity = linear
+										end
+									end
+									if angular then
+										local currentAngular = part.AssemblyAngularVelocity
+										if not currentAngular or currentAngular:DistanceSquared(angular) > 1e-8 then
+											part.AssemblyAngularVelocity = angular
+										end
+									end
+									rawset(part, "__matrixDirty", true)
+									rawset(part, "__partAABB", nil)
+									local batch = rawget(part, "__workspaceBatch")
+									if batch then
+										batch.instancesDirty = true
+									end
+									local chunk = rawget(part, "__workspaceChunk")
+									if chunk then
+										chunk.instanceDataDirty = true
+									end
+								end
+							end
+						end
+					else
+						bulkOk = true
+					end
+				end
+				if not bulkOk then
 				for part, bodyID in pairs(movingBodiesMap) do
 					if part.Parent == nil then
 						continue
@@ -2364,6 +2478,7 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 							end
 						end
 					end
+				end
 				end
 				local _syncDur = os.clock() - _syncStart
 				local moving = 0

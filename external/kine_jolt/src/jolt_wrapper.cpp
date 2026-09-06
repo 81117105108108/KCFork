@@ -1086,6 +1086,47 @@ void JPH_BodyInterface_GetRotation(JPH_BodyInterfaceRef bodyInterface, JPH_BodyI
     *outRotation = FromJPH(ToBodyInterface(bodyInterface)->GetRotation(ToBodyID(bodyID)));
 }
 
+uint32_t JPH_BodyInterface_GetBulkTransforms(
+    JPH_BodyInterfaceRef bodyInterface,
+    const JPH_BodyID* ids,
+    uint32_t count,
+    void* outBuffer,
+    uint32_t outCapacityBytes
+)
+{
+    if (bodyInterface == nullptr || ids == nullptr || outBuffer == nullptr || count == 0)
+        return 0;
+
+    const uint32_t kStride = 32;
+    uint32_t maxCount = outCapacityBytes / kStride;
+    uint32_t n = count < maxCount ? count : maxCount;
+    auto* dst = static_cast<uint8_t*>(outBuffer);
+    JPH::BodyInterface* bi = ToBodyInterface(bodyInterface);
+
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        const JPH_BodyID packed = ids[i];
+        JPH::RVec3 position;
+        JPH::Quat rotation;
+        bi->GetPositionAndRotation(ToBodyID(packed), position, rotation);
+
+        uint8_t* row = dst + (size_t)i * kStride;
+        memcpy(row + 0, &packed, 4);
+        float px = (float)position.GetX();
+        float py = (float)position.GetY();
+        float pz = (float)position.GetZ();
+        memcpy(row + 4, &px, 4);
+        memcpy(row + 8, &py, 4);
+        memcpy(row + 12, &pz, 4);
+        JPH_Quat q = FromJPH(rotation);
+        memcpy(row + 16, &q.x, 4);
+        memcpy(row + 20, &q.y, 4);
+        memcpy(row + 24, &q.z, 4);
+        memcpy(row + 28, &q.w, 4);
+    }
+    return n;
+}
+
 void JPH_BodyInterface_GetLinearVelocity(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, JPH_Vec3* outVelocity)
 {
     if (bodyInterface == nullptr || outVelocity == nullptr)

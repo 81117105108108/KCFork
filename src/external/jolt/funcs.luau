@@ -270,6 +270,11 @@ local JPH_BodyInterface_GetPositionAndRotation = {
 --                                    JPH_Quat* outRotation)
 local JPH_BodyInterface_GetRotation = { returns = void, args = { ptr, u32, ptr } }
 
+-- uint32_t JPH_BodyInterface_GetBulkTransforms(JPH_BodyInterfaceRef,
+--    const JPH_BodyID* ids, uint32_t count, void* outBuffer, uint32_t outCapacityBytes)
+-- Packs [BodyID:u32, Px:f32, Py:f32, Pz:f32, Qx:f32, Qy:f32, Qz:f32, Qw:f32]*N (32B stride).
+local JPH_BodyInterface_GetBulkTransforms = { returns = u32, args = { ptr, ptr, u32, ptr, u32 } }
+
 -- void JPH_BodyInterface_GetLinearVelocity(JPH_BodyInterfaceRef, JPH_BodyID,
 --                                          JPH_Vec3* outVelocity)
 local JPH_BodyInterface_GetLinearVelocity = { returns = void, args = { ptr, u32, ptr } }
@@ -459,6 +464,7 @@ return {
 	JPH_BodyInterface_GetPosition = JPH_BodyInterface_GetPosition,
 	JPH_BodyInterface_GetPositionAndRotation = JPH_BodyInterface_GetPositionAndRotation,
 	JPH_BodyInterface_GetRotation = JPH_BodyInterface_GetRotation,
+	JPH_BodyInterface_GetBulkTransforms = JPH_BodyInterface_GetBulkTransforms,
 	JPH_BodyInterface_GetLinearVelocity = JPH_BodyInterface_GetLinearVelocity,
 	JPH_BodyInterface_GetAngularVelocity = JPH_BodyInterface_GetAngularVelocity,
 	JPH_BodyInterface_AddImpulse = JPH_BodyInterface_AddImpulse,
