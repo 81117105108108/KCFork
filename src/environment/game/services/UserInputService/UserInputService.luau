@@ -53,6 +53,8 @@ local state = {
 	lastInputType = Enum.UserInputType.None,
 	focusedTextBox = nil,
 	windowFocused = true,
+	mouseDelta = ZERO2,
+	inputRouteSeen = false,
 }
 
 local keyBindings = {}
@@ -366,8 +368,10 @@ local function updateInputFrame()
 	end
 
 	local mouseDelta = Argon:GetMouseDelta()
+	local sensitivity = tonumber(UserInputService.MouseDeltaSensitivity) or 1
+	state.mouseDelta = Vector2.new(mouseDelta.x * sensitivity, mouseDelta.y * sensitivity)
 	if mouseDelta.x ~= 0 or mouseDelta.y ~= 0 then
-		local delta = Vector3.new(mouseDelta.x, mouseDelta.y, 0)
+		local delta = Vector3.new(state.mouseDelta.X, state.mouseDelta.Y, 0)
 		local input = newInputObject(
 			Enum.UserInputType.MouseMovement,
 			Enum.UserInputState.Change,
@@ -473,9 +477,7 @@ function UserInputService:GetMouseDelta()
 	if not state.renderer then
 		return ZERO2
 	end
-	local delta = Argon:GetMouseDelta()
-	local sensitivity = tonumber(self.MouseDeltaSensitivity) or 1
-	return Vector2.new(delta.x * sensitivity, delta.y * sensitivity)
+	return state.mouseDelta
 end
 
 function UserInputService:GetMouseLocation()
@@ -695,6 +697,8 @@ UserInputService.InitRenderer = function(renderer, rendererSignal, datamodel)
 	state.datamodel = datamodel
 	table.clear(state.pressedKeys)
 	table.clear(state.pressedMouseButtons)
+	state.mouseDelta = ZERO2
+	state.inputRouteSeen = false
 
 	if state.rendererConnection then
 		state.rendererConnection:Disconnect()
@@ -728,7 +732,12 @@ UserInputService.InitRenderer = function(renderer, rendererSignal, datamodel)
 	end
 
 	state.rendererConnection = rendererSignal:Connect(function(route)
-		if route == "PreRender" then
+		if route == "Input" then
+			state.inputRouteSeen = true
+			updateInputFrame()
+		elseif route == "PreRender" and not state.inputRouteSeen then
+			-- Compatibility for alternate renderers that do not expose the
+			-- dedicated input phase yet.
 			updateInputFrame()
 		end
 	end)

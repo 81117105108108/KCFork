@@ -47,6 +47,7 @@ export type Fns = {
 		valueCount: int
 	) -> bool,
 	Kine_Filament_SetGlobalShader: (ctx: FFIPointer, shader: FFIPointer?) -> bool,
+	Kine_Filament_SetPostProcessShader: (ctx: FFIPointer, shader: FFIPointer?) -> bool,
 	Kine_Filament_Shader_GetLastError: () -> FFIPointer,
 
 	Kine_Filament_CreateSky: (ctx: FFIPointer, r: float, g: float, b: float, a: float) -> (),
@@ -372,10 +373,28 @@ export type Fns = {
 		intensity: float,
 		falloff: float
 	) -> int,
+	Kine_Filament_CreateLightEx: (
+		ctx: FFIPointer,
+		lightType: int,
+		px: float, py: float, pz: float,
+		dx: float, dy: float, dz: float,
+		cr: float, cg: float, cb: float,
+		intensity: float,
+		falloff: float,
+		innerConeRadians: float,
+		outerConeRadians: float,
+		castShadows: bool,
+		enabled: bool
+	) -> int,
 	Kine_Filament_SetColorLight: (ctx: FFIPointer, light: int, r: float, g: float, b: float) -> (),
 	Kine_Filament_SetIntensityLight: (ctx: FFIPointer, light: int, intensity: float) -> (),
 	Kine_Filament_SetFalloffLight: (ctx: FFIPointer, light: int, falloff: float) -> (),
 	Kine_Filament_SetPositionLight: (ctx: FFIPointer, light: int, x: float, y: float, z: float) -> (),
+	Kine_Filament_SetDirectionLight: (ctx: FFIPointer, light: int, x: float, y: float, z: float) -> (),
+	Kine_Filament_SetConeLight: (ctx: FFIPointer, light: int, innerRadians: float, outerRadians: float) -> (),
+	Kine_Filament_SetShadowLight: (ctx: FFIPointer, light: int, castShadows: bool) -> (),
+	Kine_Filament_SetEnabledLight: (ctx: FFIPointer, light: int, enabled: bool) -> (),
+	Kine_Filament_RemoveLight: (ctx: FFIPointer, light: int) -> (),
 
 	-- Decal management. Returns an opaque int decal ID, or -1 on failure.
 	Kine_Filament_CreateDecal: (
@@ -528,6 +547,10 @@ local funcs = {
 		args = { ffi.types.pointer, ffi.types.pointer, ffi.types.pointer, ffi.types.i32 },
 	},
 	Kine_Filament_SetGlobalShader = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.pointer },
+	},
+	Kine_Filament_SetPostProcessShader = {
 		returns = ffi.types.u8,
 		args = { ffi.types.pointer, ffi.types.pointer },
 	},
@@ -957,6 +980,22 @@ local funcs = {
 			ffi.types.float, -- falloff
 		},
 	},
+	Kine_Filament_CreateLightEx = {
+		returns = ffi.types.i32,
+		args = {
+			ffi.types.pointer,
+			ffi.types.i32,
+			ffi.types.float, ffi.types.float, ffi.types.float,
+			ffi.types.float, ffi.types.float, ffi.types.float,
+			ffi.types.float, ffi.types.float, ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.u8,
+			ffi.types.u8,
+		},
+	},
 	Kine_Filament_SetColorLight = {
 		returns = ffi.types.void,
 		args = {
@@ -984,6 +1023,26 @@ local funcs = {
 			ffi.types.float,
 			ffi.types.float, -- position (x,y,z)
 		},
+	},
+	Kine_Filament_SetDirectionLight = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.float, ffi.types.float, ffi.types.float },
+	},
+	Kine_Filament_SetConeLight = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.float, ffi.types.float },
+	},
+	Kine_Filament_SetShadowLight = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.u8 },
+	},
+	Kine_Filament_SetEnabledLight = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.u8 },
+	},
+	Kine_Filament_RemoveLight = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.i32 },
 	},
 
 	-- Decal management

@@ -26,6 +26,15 @@ Inspector.Size = theme.InspectorCoordinates.Size
 Inspector.Position = theme.InspectorCoordinates.Position
 Inspector.Parent = game.CoreGui:FindFirstChild("Studio")
 Inspector.BackgroundTransparency = 1
+local visible = true
+
+if ishared.StudioSystem then
+	ishared.StudioSystem:Connect(function(route)
+		if route == "toggle_inspector" then
+			visible = not visible
+		end
+	end)
+end
 
 local uiScale = 1
 local textSize = 15 * uiScale
@@ -40,8 +49,8 @@ local propertySeparatorWidth = 1 * uiScale
 local searchBoxHeight = 20
 
 local iconPath = "./src/assets/images/icons/"
-local arrowRight = Argon:CreateImageFromPath(iconPath .. "ArrowRight.png")
-local expandedIcon = Argon:CreateImageFromPath(iconPath .. "ArrowDown.png")
+local arrowRight = Argon:CreateImageFromPath(iconPath .. "ArrowRight.svg")
+local expandedIcon = Argon:CreateImageFromPath(iconPath .. "ArrowDown.svg")
 
 local categoryExpanded = setmetatable({}, {
 	__index = function()
@@ -301,6 +310,59 @@ local adapters = {
 		}, dt)
 	end,
 
+	Vector2 = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local boxWidth = (width - 4) / 2
+
+		local function input(id, x, component, color)
+			Immco.TextInput({
+				x = x,
+				y = prop_y,
+				width = boxWidth,
+				height = 16,
+				id = prop.name .. "_" .. id,
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = {
+					R = color.R,
+					G = color.G,
+					B = color.B,
+					A = 1,
+				},
+
+				FocusColor = {
+					R = color.R + 0.05,
+					G = color.G + 0.05,
+					B = color.B + 0.05,
+					A = 1,
+				},
+
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
+
+				placeholder = tostring(value[component]),
+
+				OnSubmit = function(text)
+					local number = tonumber(text)
+					if not number then
+						return
+					end
+
+					local current = firstObj[prop.name]
+					firstObj[prop.name] =
+						Vector2.new(component == "X" and number or current.X, component == "Y" and number or current.Y)
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+
+		input("X", prop_x, "X", { R = 0.35, G = 0.08, B = 0.08 })
+		input("Y", prop_x + boxWidth + 4, "Y", { R = 0.08, G = 0.35, B = 0.08 })
+	end,
+
 	Vector3 = function(prop, firstObj, prop_x, prop_y, dt, width)
 		local value = prop.value
 
@@ -522,9 +584,50 @@ local adapters = {
 			}, dt)
 		end
 	end,
+
+	CFrame = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local position = value.Position
+		local rx, ry, rz = value:ToEulerAnglesXYZ()
+
+		Immco.Text({
+			x = prop_x,
+			y = prop_y + 2,
+			TextSize = textSize,
+			theme = theme,
+			Font = Argon:CreateFont(theme.Font),
+			text = string.format(
+				"P:(%.2f, %.2f, %.2f) R:(%.2f, %.2f, %.2f)",
+				position.X,
+				position.Y,
+				position.Z,
+				rx,
+				ry,
+				rz
+			),
+			Color = theme.TextColor,
+			engine_window = renderer.Window,
+		}, dt)
+	end,
+
+	default = function(prop, firstObj, prop_x, prop_y, dt, width)
+		Immco.Text({
+			x = prop_x,
+			y = prop_y + 2,
+			TextSize = textSize,
+			theme = theme,
+			Font = Argon:CreateFont(theme.Font),
+			text = tostring(prop.value),
+			Color = theme.TextColor,
+			engine_window = renderer.Window,
+		}, dt)
+	end,
 }
 
 renderer.Pool.new("2d", function()
+	if not visible then
+		return
+	end
 	local dt = renderer.RuntimeLibrary.dt
 	local absolutePosition = Inspector.AbsolutePosition
 	local absoluteSize = Inspector.AbsoluteSize
@@ -781,16 +884,9 @@ renderer.Pool.new("2d", function()
 								local prop_x = separatorX + (4 * uiScale)
 								local prop_y = rowY - 15
 
-								if adapters[typeof(prop.value)] then
-									adapters[typeof(prop.value)](
-										prop,
-										firstObj,
-										prop_x,
-										prop_y,
-										dt,
-										(propertyWidth * 0.5) - 10
-									)
-								end
+								local adapterType = typeof(prop.value)
+								local adapter = adapters[adapterType] or adapters.default
+								adapter(prop, firstObj, prop_x, prop_y, dt, (propertyWidth * 0.5) - 10)
 
 								rowY += rowHeight
 							end

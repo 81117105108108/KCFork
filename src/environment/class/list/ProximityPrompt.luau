@@ -121,12 +121,15 @@ return {
 			local Registry = require("@InstanceRegistry")
 			local billboard = Registry.new("BillboardGui", renderer, datamodel)
 			billboard.Name = "ProximityPromptBillboard"
-			billboard.Size = UDim2.new(0, 230, 0, 74)
-			billboard.PixelsPerStud = 70
+			billboard.Size = UDim2.new(0, 340, 0, 108)
+			billboard.PixelsPerStud = 80
 			billboard.AlwaysOnTop = true
-			billboard.StudsOffsetWorldSpace = Vector3.new(0, 2.25, 0)
+			billboard.StudsOffsetWorldSpace = Vector3.new(0, 2.5, 0)
 			billboard.MaxDistance = instance.MaxIndicatorDistance
 			billboard.Adornee = getAdornee(instance)
+			billboard.Camera = datamodel.Workspace
+				and (datamodel.Workspace.CurrentCamera or datamodel.Workspace.Camera)
+			billboard.CanReplicate = false
 			billboard.Enabled = false
 			billboard.Parent = instance
 
@@ -135,47 +138,53 @@ return {
 			background.Size = UDim2.new(1, 0, 1, 0)
 			background.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
 			background.BackgroundTransparency = 0.12
+			background.CanReplicate = false
 			background.Parent = billboard
 
 			local corner = Registry.new("UICorner", renderer, datamodel)
 			corner.CornerRadius = require("@UDim").new(0, 14)
+			corner.CanReplicate = false
 			corner.Parent = background
 
 			local keyLabel = Registry.new("TextLabel", renderer, datamodel)
 			keyLabel.Name = "Key"
-			keyLabel.Position = UDim2.new(0, 10, 0, 10)
-			keyLabel.Size = UDim2.new(0, 48, 0, 48)
+			keyLabel.Position = UDim2.new(0, 14, 0, 20)
+			keyLabel.Size = UDim2.new(0, 68, 0, 68)
 			keyLabel.BackgroundColor3 = Color3.fromRGB(244, 205, 20)
 			keyLabel.BackgroundTransparency = 0
 			keyLabel.TextColor3 = Color3.fromRGB(30, 28, 18)
-			keyLabel.TextSize = 22
+			keyLabel.TextSize = 30
 			keyLabel.Text = instance.KeyboardKeyCode and instance.KeyboardKeyCode.Name or "E"
+			keyLabel.CanReplicate = false
 			keyLabel.Parent = background
 
 			local keyCorner = Registry.new("UICorner", renderer, datamodel)
-			keyCorner.CornerRadius = require("@UDim").new(0, 10)
+			keyCorner.CornerRadius = require("@UDim").new(0, 14)
+			keyCorner.CanReplicate = false
 			keyCorner.Parent = keyLabel
 
 			local actionLabel = Registry.new("TextLabel", renderer, datamodel)
 			actionLabel.Name = "Action"
-			actionLabel.Position = UDim2.new(0, 70, 0, 7)
-			actionLabel.Size = UDim2.new(1, -80, 0, 34)
+			actionLabel.Position = UDim2.new(0, 98, 0, 13)
+			actionLabel.Size = UDim2.new(1, -112, 0, 43)
 			actionLabel.BackgroundTransparency = 1
 			actionLabel.TextColor3 = Color3.new(1, 1, 1)
-			actionLabel.TextSize = 20
+			actionLabel.TextSize = 28
 			actionLabel.TextXAlignment = Enum.TextXAlignment.Left
 			actionLabel.Text = instance.ActionText
+			actionLabel.CanReplicate = false
 			actionLabel.Parent = background
 
 			local objectLabel = Registry.new("TextLabel", renderer, datamodel)
 			objectLabel.Name = "Object"
-			objectLabel.Position = UDim2.new(0, 70, 0, 38)
-			objectLabel.Size = UDim2.new(1, -80, 0, 24)
+			objectLabel.Position = UDim2.new(0, 98, 0, 59)
+			objectLabel.Size = UDim2.new(1, -112, 0, 31)
 			objectLabel.BackgroundTransparency = 1
 			objectLabel.TextColor3 = Color3.fromRGB(180, 184, 194)
-			objectLabel.TextSize = 14
+			objectLabel.TextSize = 18
 			objectLabel.TextXAlignment = Enum.TextXAlignment.Left
 			objectLabel.Text = instance.ObjectText
+			objectLabel.CanReplicate = false
 			objectLabel.Parent = background
 
 			record.billboard, record.keyLabel, record.actionLabel, record.objectLabel = billboard, keyLabel, actionLabel, objectLabel
@@ -184,21 +193,35 @@ return {
 		local function refreshGui()
 			createPromptGui()
 			if not record.billboard then return end
-			record.billboard.Adornee = getAdornee(instance)
-			record.billboard.MaxDistance = instance.MaxIndicatorDistance
-			record.billboard.Enabled = record.visible
-			record.keyLabel.Text = instance.KeyboardKeyCode and instance.KeyboardKeyCode.Name or "E"
-			record.actionLabel.Text = instance.ActionText
-			record.objectLabel.Text = instance.ObjectText
+			local adornee = getAdornee(instance)
+			local camera = datamodel.Workspace
+				and (datamodel.Workspace.CurrentCamera or datamodel.Workspace.Camera)
+			local keyText = instance.KeyboardKeyCode and instance.KeyboardKeyCode.Name or "E"
+			if record.billboard.Adornee ~= adornee then record.billboard.Adornee = adornee end
+			if record.billboard.Camera ~= camera then record.billboard.Camera = camera end
+			if record.billboard.MaxDistance ~= instance.MaxIndicatorDistance then
+				record.billboard.MaxDistance = instance.MaxIndicatorDistance
+			end
+			if record.billboard.Enabled ~= record.visible then record.billboard.Enabled = record.visible end
+			if record.keyLabel.Text ~= keyText then record.keyLabel.Text = keyText end
+			if record.actionLabel.Text ~= instance.ActionText then record.actionLabel.Text = instance.ActionText end
+			if record.objectLabel.Text ~= instance.ObjectText then record.objectLabel.Text = instance.ObjectText end
 		end
 
 		local function updateVisibility()
 			if IsServer == true then return end
 			local players = datamodel and datamodel:GetService("Players")
 			local rootPosition = getPosition(getPlayerRoot(players and players.LocalPlayer))
+			if not rootPosition then
+				local workspace = datamodel and datamodel.Workspace
+				local camera = workspace and (workspace.CurrentCamera or workspace.Camera)
+				rootPosition = camera and camera.CFrame and camera.CFrame.Position or nil
+			end
 			local promptPosition = getPosition(getAdornee(instance))
 			record.distance = if rootPosition and promptPosition then (rootPosition - promptPosition):Magnitude() else math.huge
-			local maxDistance = math.max(0, tonumber(instance.MaxIndicatorDistance) or tonumber(instance.MaxActivationDistance) or 0)
+			local indicatorDistance = tonumber(instance.MaxIndicatorDistance) or 0
+			local maxDistance = math.max(0, indicatorDistance > 0 and indicatorDistance
+				or tonumber(instance.MaxActivationDistance) or 0)
 			local visible = instance.Enabled and record.distance <= maxDistance
 			if visible ~= record.visible then
 				record.visible = visible

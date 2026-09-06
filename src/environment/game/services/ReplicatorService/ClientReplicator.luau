@@ -14,6 +14,7 @@ function ClientReplicator.new(transport, datamodel, renderer, options)
 	self.world = ReplicationWorld.new("client", datamodel, renderer, options)
 	self.character = CharacterReplicator.new({
 		role = "client",
+		clientAuthoritative = true,
 		tick = function()
 			return self.datamodel:GetService("RunService"):GetSimulationTick()
 		end,
@@ -24,7 +25,11 @@ function ClientReplicator.new(transport, datamodel, renderer, options)
 	self.events, self.connections, self.pendingSpawns = {}, {}, {}
 	self.options = options or {}
 	self.studioRequestId, self.studioRequests, self.collaborators = 0, {}, {}
-	self.cameraGizmos = if self.options.studio then CollaboratorCameraGizmos.new(renderer) else nil
+	-- Create camera gizmos when a renderer is available (unless headless).
+	self.cameraGizmos = nil
+	if renderer and not _G.IsHeadless then
+		self.cameraGizmos = CollaboratorCameraGizmos.new(renderer)
+	end
 	self.running, self.connected, self.playerId = false, false, nil
 	self.rtt, self.jitter, self.lastPing = 0, 0, 0
 	self.ownedPhysicsCache = {}
@@ -103,41 +108,52 @@ function ClientReplicator:EnableStudioCollaboration()
 		return true
 	end
 
-	table.insert(self.connections, self.datamodel.DescendantChanged:Connect(function(instance, property)
-		if not self.connected or applying() or not canReplicate(instance) then
-			return
-		end
-		local id = self.world:GetId(instance)
-		if id and ReplicationSchema.IsReplicated(instance, property) then
-			self:SendStudioEdit({
-				op = "set",
-				id = id,
-				property = property,
-				value = ReplicationSchema.EncodeValue(instance[property], self.world),
-			})
-		end
-	end))
-
-	table.insert(self.connections, self.datamodel.DescendantAdded:Connect(function(instance)
-		if not self.connected or applying() or not canReplicate(instance) then
-			return
-		end
-		local parent = instance.Parent
-		local parentId = parent and self.world:GetId(parent)
-		if not parentId then
-			return
-		end
-		local id = self.world:GetId(instance)
-		if id then
-			self:ReparentStudioInstance(instance, parent)
-			return
-		end
-		self:CreateStudioInstance(instance.ClassName, parent, ReplicationSchema.Capture(instance, self.world), function(result)
-			if not result.ok and instance.Parent then
-				instance:Destroy()
+	table.insert(
+		self.connections,
+		self.datamodel.DescendantChanged:Connect(function(instance, property)
+			if not self.connected or applying() or not canReplicate(instance) then
+				return
+			end
+			local id = self.world:GetId(instance)
+			if id and ReplicationSchema.IsReplicated(instance, property) then
+				self:SendStudioEdit({
+					op = "set",
+					id = id,
+					property = property,
+					value = ReplicationSchema.EncodeValue(instance[property], self.world),
+				})
 			end
 		end)
-	end))
+	)
+
+	table.insert(
+		self.connections,
+		self.datamodel.DescendantAdded:Connect(function(instance)
+			if not self.connected or applying() or not canReplicate(instance) then
+				return
+			end
+			local parent = instance.Parent
+			local parentId = parent and self.world:GetId(parent)
+			if not parentId then
+				return
+			end
+			local id = self.world:GetId(instance)
+			if id then
+				self:ReparentStudioInstance(instance, parent)
+				return
+			end
+			self:CreateStudioInstance(
+				instance.ClassName,
+				parent,
+				ReplicationSchema.Capture(instance, self.world),
+				function(result)
+					if not result.ok and instance.Parent then
+						instance:Destroy()
+					end
+				end
+			)
+		end)
+	)
 end
 
 function ClientReplicator:Send(kind, payload, reliableOverride)
@@ -185,7 +201,41 @@ local RIG_OFFSETS = {
 	Torso = CFrame.new(0, 0, 0),
 	Neck = CFrame.new(0, 1.32, 0),
 	Head = CFrame.new(0, 2.02, 0),
+	["Left Shoulder"] = CFrame.new(-1.2, 0.67, 0),
+	["Left Arm"] = CFrame.new(-1.2, -0.14, 0),
+	["Left Hand"] = CFrame.new(-1.2, -0.88, 0),
+	["Right Shoulder"] = CFrame.new(1.2, 0.67, 0),
+	["Right Arm"] = CFrame.new(1.2, -0.14, 0),
+	["Right Hand"] = CFrame.new(1.2, -0.88, 0),
+	["Left Hip"] = CFrame.new(-0.43, -1.5, 0),
+	["Left Leg"] = CFrame.new(-0.43, -2.43, 0),
+	["Left Foot"] = CFrame.new(-0.43, -3.28, -0.14),
+	["Right Hip"] = CFrame.new(0.43, -1.5, 0),
+	["Right Leg"] = CFrame.new(0.43, -2.43, 0),
+	["Right Foot"] = CFrame.new(0.43, -3.28, -0.14),
 }
+
+local function animatedRigOffset(partName, angle)
+	local offset = RIG_OFFSETS[partName]
+	local left = string.find(partName, "Left ") == 1
+	local right = string.find(partName, "Right ") == 1
+	local arm = string.find(partName, "Shoulder") or string.find(partName, "Arm") or string.find(partName, "Hand")
+	local leg = string.find(partName, "Hip") or string.find(partName, "Leg") or string.find(partName, "Foot")
+	if left and arm then
+		return CFrame.new(-1.2, 1.03, 0) * CFrame.Angles(angle, 0, 0)
+			* CFrame.new(0, offset.Position.Y - 1.03, offset.Position.Z)
+	elseif right and arm then
+		return CFrame.new(1.2, 1.03, 0) * CFrame.Angles(angle, 0, 0)
+			* CFrame.new(0, offset.Position.Y - 1.03, offset.Position.Z)
+	elseif left and leg then
+		return CFrame.new(-0.43, -1.15, 0) * CFrame.Angles(angle, 0, 0)
+			* CFrame.new(0, offset.Position.Y + 1.15, offset.Position.Z)
+	elseif right and leg then
+		return CFrame.new(0.43, -1.15, 0) * CFrame.Angles(angle, 0, 0)
+			* CFrame.new(0, offset.Position.Y + 1.15, offset.Position.Z)
+	end
+	return offset
+end
 
 local function removeUntrackedRigDuplicates(character, world)
 	local authoritative = {}
@@ -195,7 +245,8 @@ local function removeUntrackedRigDuplicates(character, world)
 		end
 	end
 	for _, child in ipairs(character:GetChildren()) do
-		if RIG_PART_NAMES[child.Name]
+		if
+			RIG_PART_NAMES[child.Name]
 			and child.BaseClass == "BasePart"
 			and authoritative[child.Name]
 			and child ~= authoritative[child.Name]
@@ -225,9 +276,15 @@ function ClientReplicator:ConfigureCharacters()
 		end
 		removeUntrackedRigDuplicates(candidate, self.world)
 
-		if candidate.PrimaryPart ~= root then candidate.PrimaryPart = root end
-		if humanoid.Character ~= candidate then humanoid.Character = candidate end
-		if humanoid.RootPart ~= root then humanoid.RootPart = root end
+		if candidate.PrimaryPart ~= root then
+			candidate.PrimaryPart = root
+		end
+		if humanoid.Character ~= candidate then
+			humanoid.Character = candidate
+		end
+		if humanoid.RootPart ~= root then
+			humanoid.RootPart = root
+		end
 		charactersByName[candidate.Name] = candidate
 		configurations[#configurations + 1] = { character = candidate, root = root }
 	end
@@ -251,14 +308,24 @@ function ClientReplicator:ConfigureCharacters()
 		local candidate, root = configuration.character, configuration.root
 		local controller = candidate:FindFirstChildOfClass("CharacterController")
 		if controller then
-			if controller.Character ~= candidate then controller.Character = candidate end
-			if controller.RootPart ~= root then controller.RootPart = root end
+			if controller.Character ~= candidate then
+				controller.Character = candidate
+			end
+			if controller.RootPart ~= root then
+				controller.RootPart = root
+			end
 			local shouldSimulate = candidate == localCharacter
-			if controller.Enabled ~= shouldSimulate then controller.Enabled = shouldSimulate end
+			if controller.Enabled ~= shouldSimulate then
+				controller.Enabled = shouldSimulate
+			end
 			local motor = controller:GetMotor()
 			if motor then
-				if motor.RootPart ~= root then motor.RootPart = root end
-				if motor.Enabled ~= shouldSimulate then motor.Enabled = shouldSimulate end
+				if motor.RootPart ~= root then
+					motor.RootPart = root
+				end
+				if motor.Enabled ~= shouldSimulate then
+					motor.Enabled = shouldSimulate
+				end
 			end
 		end
 	end
@@ -274,7 +341,9 @@ function ClientReplicator:ConfigureCharacters()
 	end
 	if localPlayer then
 		local localUserId = self.playerId or localPlayer.UserId
-		if localPlayer.UserId ~= localUserId then localPlayer.UserId = localUserId end
+		if localPlayer.UserId ~= localUserId then
+			localPlayer.UserId = localUserId
+		end
 		assignPlayerCharacter(localPlayer, localCharacter or charactersByName[localPlayer.Name])
 	end
 	return localCharacter ~= nil
@@ -284,14 +353,23 @@ function ClientReplicator:PoseRemoteCharacters()
 	for _, configuration in ipairs(self.characterConfigurations or {}) do
 		local character, root = configuration.character, configuration.root
 		if character ~= self.boundCharacter and character.Parent and root and root.CFrame then
-			-- The server snapshots animate remote limbs. Torso and head are rigid,
-			-- so derive them from the interpolated root to keep facing perfectly in
-			-- sync instead of waiting for separate part snapshots.
-			for _, partName in ipairs({ "Torso", "Neck", "Head" }) do
-				local offset = RIG_OFFSETS[partName]
+			-- Characters replicate one client-owned root. Pose visual limbs locally so
+			-- animation does not multiply character bandwidth or proxy updates.
+			local velocity = root.AssemblyLinearVelocity
+			local moving = velocity and (velocity.X * velocity.X + velocity.Z * velocity.Z) > 0.01
+			local swing = moving and math.sin(os.clock() * 9) * 0.45 or 0
+			for partName in pairs(RIG_OFFSETS) do
 				local part = character:FindFirstChild(partName)
 				if part and part.CFrame then
-					local posedCFrame = root.CFrame * offset
+					local id = self.world:GetId(part)
+					if id then
+						self.world.interpolation[id] = nil
+					end
+					local opposite = string.find(partName, "Left ") == 1
+						and (string.find(partName, "Shoulder") or string.find(partName, "Arm") or string.find(partName, "Hand"))
+						or string.find(partName, "Right ") == 1
+							and (string.find(partName, "Hip") or string.find(partName, "Leg") or string.find(partName, "Foot"))
+					local posedCFrame = root.CFrame * animatedRigOffset(partName, swing * (opposite and -1 or 1))
 					if not part.CFrame:IsSameTransform(posedCFrame, 1e-4) then
 						part.CFrame = posedCFrame
 					end
@@ -317,7 +395,9 @@ function ClientReplicator:BindLocalCharacter()
 	end
 	if self.boundCharacter ~= character then
 		self.boundCharacter = character
-		print(`[CharacterReplication][Client] Bound local character "{character.Name}" (root {self.world.localCharacterId})`)
+		print(
+			`[CharacterReplication][Client] Bound local character "{character.Name}" (root {self.world.localCharacterId})`
+		)
 	end
 	return true
 end
@@ -353,11 +433,10 @@ end
 
 function ClientReplicator:HandleAuthoritativeState(id, state, snapshot)
 	local ownership = self.world.ownership:Get(id)
-	if ownership and ownership.owner == self.playerId and id ~= self.world.localCharacterId then
+	if ownership and ownership.owner == self.playerId then
 		-- The server echoes validated owner state to every peer. Applying that
-		-- delayed echo back to the owning client fights its live Jolt body every
-		-- render frame, causing jitter and a large Changed/proxy-sync feedback
-		-- loop. Other clients still interpolate the same authoritative state.
+		-- delayed echo back to its owner fights live character/physics simulation.
+		-- The server has already validated it; only other clients interpolate it.
 		state[ReplicationSchema.Properties.CFrame] = nil
 		state[ReplicationSchema.Properties.AssemblyLinearVelocity] = nil
 		state[ReplicationSchema.Properties.AssemblyAngularVelocity] = nil
@@ -407,7 +486,11 @@ function ClientReplicator:OnMessage(_, packet)
 	elseif kind == Protocol.Kinds.Spawn then
 		local spawned, reason = self.world:ApplySpawn(payload)
 		if not spawned then
-			warn(`[Replication][Client] Queued spawn {tostring(payload.class)} "{tostring(payload.name)}": {tostring(reason)}`)
+			warn(
+				`[Replication][Client] Queued spawn {tostring(payload.class)} "{tostring(payload.name)}": {tostring(
+					reason
+				)}`
+			)
 			table.insert(self.pendingSpawns, payload)
 		end
 		self:ApplyPendingSpawns()
@@ -463,6 +546,19 @@ function ClientReplicator:OnMessage(_, packet)
 		end
 	elseif kind == Protocol.Kinds.StudioPresence and type(payload.collaborators) == "table" then
 		self.collaborators = payload.collaborators
+		if self.cameraGizmos then
+			local active = { host = true }
+			for _, collaborator in ipairs(payload.collaborators) do
+				if type(collaborator) == "table" and type(collaborator.Id) == "string" then
+					active[collaborator.Id] = true
+				end
+			end
+			for id in pairs(self.cameraGizmos.states) do
+				if not active[id] then
+					self.cameraGizmos:Remove(id)
+				end
+			end
+		end
 	elseif kind == Protocol.Kinds.StudioCamera and type(payload.id) == "string" then
 		local decoded, cframe = pcall(ReplicationSchema.DecodeValue, payload.cframe, self.world)
 		if decoded and self.cameraGizmos then
@@ -503,10 +599,7 @@ function ClientReplicator:SendOwnedPhysics()
 					id = id,
 					ownershipVersion = record.version,
 					state = {
-						[ReplicationSchema.Properties.CFrame] = ReplicationSchema.EncodeValue(
-							cframe,
-							self.world
-						),
+						[ReplicationSchema.Properties.CFrame] = ReplicationSchema.EncodeValue(cframe, self.world),
 						[ReplicationSchema.Properties.AssemblyLinearVelocity] = ReplicationSchema.EncodeValue(
 							linear,
 							self.world
@@ -556,6 +649,7 @@ function ClientReplicator:Start(address, port, arguments)
 	)
 	task.spawn(function()
 		local lastCamera
+		local lastCameraSentAt = -math.huge
 		local interval = 1 / 30
 		while self.running do
 			task.wait(interval)
@@ -564,14 +658,15 @@ function ClientReplicator:Start(address, port, arguments)
 				self:SendOwnedPhysics()
 				if self.options.studio then
 					local workspace = self.datamodel:GetService("Workspace")
-					local camera = workspace
-						and (workspace.CurrentCamera or workspace:FindFirstChildOfClass("Camera"))
+					local camera = workspace and (workspace.CurrentCamera or workspace:FindFirstChildOfClass("Camera"))
 					local cframe = camera and camera.CFrame
-					if cframe and (not lastCamera or not cframe:IsSameTransform(lastCamera, 1e-3)) then
+					local now = os.clock()
+					if cframe and (not lastCamera or not cframe:IsSameTransform(lastCamera, 1e-3) or now - lastCameraSentAt >= 1) then
 						self:Send(Protocol.Kinds.StudioCamera, {
 							cframe = ReplicationSchema.EncodeValue(cframe, self.world),
 						}, false)
 						lastCamera = cframe
+						lastCameraSentAt = now
 					end
 				end
 			end
@@ -595,7 +690,11 @@ function ClientReplicator:OnEvent(name, callback)
 end
 
 function ClientReplicator:SendEvent(name, data, reliable)
-	return self:Send(Protocol.Kinds.Event, { name = name, data = data }, reliable ~= false)
+	return self:Send(
+		Protocol.Kinds.Event,
+		{ name = name, data = data },
+		if reliable == nil then true else reliable
+	)
 end
 
 function ClientReplicator:GetStats()
@@ -607,7 +706,9 @@ function ClientReplicator:GetStats()
 	stats.ownedPhysicsPacketsSent = self.ownedPhysicsPacketsSent
 	stats.ownedPhysicsPacketsSkipped = self.ownedPhysicsPacketsSkipped
 	if self.transport.GetStats then
-		for key, value in pairs(self.transport:GetStats()) do stats[key] = value end
+		for key, value in pairs(self.transport:GetStats()) do
+			stats[key] = value
+		end
 	end
 	return stats
 end

@@ -267,6 +267,7 @@ if(KINE_WITH_FILAMENT)
     # PUBLIC link dependencies so the final whole-archive bundle inherits the
     # transitive Filament static libraries instead of leaving them unresolved.
     set(KINE_FILAMENT_CORE_LIBS
+        matp
         filamat
         filament
         backend

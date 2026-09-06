@@ -7,6 +7,7 @@ function Vector3.new(x, y, z)
 		X = x or 0,
 		Y = y or 0,
 		Z = z or 0,
+		__type = "Vector3",
 	}, Vector3)
 end
 

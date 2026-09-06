@@ -1,5 +1,6 @@
 local Instance = {}
 local Signal = require("@Kinemium.signal")
+local Enum = require("@EnumMap")
 local task = _G.zune.task
 local nextUniqueId = 1
 local cloneInitializer = nil
@@ -252,6 +253,8 @@ function Instance.new(className)
 		UniqueId = generateUniqueId(),
 		NetworkOwner = nil,
 		NetworkOwnerType = 0,
+		ReplicationMode = Enum.ReplicationMode.Automatic,
+		ReplicationGroup = "",
 	}
 
 	return setmetatable(self, instance_mt)

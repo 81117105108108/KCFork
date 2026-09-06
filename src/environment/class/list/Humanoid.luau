@@ -225,95 +225,66 @@ return {
 			end
 			local spawn = options.SpawnCFrame or CFrame.new(0, 10, 0)
 			local bodyColor = options.BodyColor or Color3.fromRGB(244, 244, 244)
-			local roundedCubeMesh = options.BodyMeshId or "kineasset://meshes/roundedcube.gltf"
-			local cylinderMesh = options.LimbMeshId or "kineasset://meshes/cylinder/scene.gltf"
-			local definitions = {
-				{
-					"HumanoidRootPart",
-					"Part",
-					Vector3.new(2, 2, 1),
-					Vector3.new(0, 0, 0),
-					options.RootColor or Color3.new(0, 0, 0),
-					1,
-				},
-				{ "Torso", "MeshPart", Vector3.new(1.75, 2.3, 0.95), Vector3.new(0, 0, 0), bodyColor, 0 },
-				{ "Neck", "MeshPart", Vector3.new(0.48, 0.36, 0.5), Vector3.new(0, 1.32, 0), bodyColor, 0 },
-				{ "Head", "Part", Vector3.new(1.3, 1.3, 1.3), Vector3.new(0, 2.02, 0), bodyColor, 0 },
-				{ "Left Shoulder", "MeshPart", Vector3.new(0.64, 0.7, 0.68), Vector3.new(-1.2, 0.67, 0), bodyColor, 0 },
-				{ "Left Arm", "MeshPart", Vector3.new(0.64, 0.9, 0.68), Vector3.new(-1.2, -0.14, 0), bodyColor, 0 },
-				{ "Left Hand", "MeshPart", Vector3.new(0.64, 0.54, 0.68), Vector3.new(-1.2, -0.88, 0), bodyColor, 0 },
-				{ "Right Shoulder", "MeshPart", Vector3.new(0.64, 0.7, 0.68), Vector3.new(1.2, 0.67, 0), bodyColor, 0 },
-				{ "Right Arm", "MeshPart", Vector3.new(0.64, 0.9, 0.68), Vector3.new(1.2, -0.14, 0), bodyColor, 0 },
-				{ "Right Hand", "MeshPart", Vector3.new(0.64, 0.54, 0.68), Vector3.new(1.2, -0.88, 0), bodyColor, 0 },
-				{ "Left Hip", "MeshPart", Vector3.new(0.72, 0.68, 0.78), Vector3.new(-0.43, -1.5, 0), bodyColor, 0 },
-				{ "Left Leg", "MeshPart", Vector3.new(0.62, 1.16, 0.7), Vector3.new(-0.43, -2.43, 0), bodyColor, 0 },
-				{
-					"Left Foot",
-					"MeshPart",
-					Vector3.new(0.72, 0.5, 1.02),
-					Vector3.new(-0.43, -3.28, -0.14),
-					bodyColor,
-					0,
-				},
-				{ "Right Hip", "MeshPart", Vector3.new(0.72, 0.68, 0.78), Vector3.new(0.43, -1.5, 0), bodyColor, 0 },
-				{ "Right Leg", "MeshPart", Vector3.new(0.62, 1.16, 0.7), Vector3.new(0.43, -2.43, 0), bodyColor, 0 },
-				{
-					"Right Foot",
-					"MeshPart",
-					Vector3.new(0.72, 0.5, 1.02),
-					Vector3.new(0.43, -3.28, -0.14),
-					bodyColor,
-					0,
-				},
+			local roundedCubeMesh = options.BodyMeshId or "./src/assets/meshes/capsule/scene.gltf"
+			local legacyPartNames = {
+				"Torso",
+				"Neck",
+				"Head",
+				"Left Shoulder",
+				"Left Arm",
+				"Left Hand",
+				"Left Hip",
+				"Left Leg",
+				"Left Foot",
+				"Right Shoulder",
+				"Right Arm",
+				"Right Hand",
+				"Right Hip",
+				"Right Leg",
+				"Right Foot",
 			}
-			for _, definition in ipairs(definitions) do
-				local name, className, size, offset, color, transparency = table.unpack(definition)
-				local part = character:FindFirstChild(name)
-				local created = false
-				if part and part.ClassName ~= className then
-					part:Destroy()
-					part = nil
-				end
-				if not part then
-					part = newObject(className)
-					if part then
-						part.Name = name
-						created = true
-					end
-				end
-				if part then
-					part.Size = size
-					part.CFrame = spawn * CFrame.new(offset)
-					part.Color = color
-					if name ~= "HumanoidRootPart" then
-						-- Neon uses a blended material path and can make imported meshes look
-						-- translucent. Use the opaque material path for every suit piece.
-						part.Material = Enum.Material.SmoothPlastic
-						part.Reflectance = 0
-						part.Metallic = 0
-						part.Roughness = 0.62
-					end
-					part.Transparency = name == "HumanoidRootPart" and 1 or 0
-					part.Anchored = true
-					part.CanCollide = false
-					part.CanQuery = name == "HumanoidRootPart"
-					if className == "MeshPart" then
-						local isBodyCore = name == "Torso" or name == "Neck"
-						part.MeshScale = isBodyCore and 0.5 or 1
-						part.MeshId = isBodyCore and roundedCubeMesh or cylinderMesh
-					elseif name == "Head" then
-						part.Shape = Enum.PartType.Ball
-					end
-					-- Publish a newly-created part only after its complete initial state is
-					-- assigned so the first replication spawn contains the mesh and color.
-					if created then
-						part.Parent = character
-					end
-					if name == "HumanoidRootPart" then
-						self.RootPart = part
-					end
+			for _, name in ipairs(legacyPartNames) do
+				local legacyPart = character:FindFirstChild(name)
+				if legacyPart then
+					legacyPart:Destroy()
 				end
 			end
+
+			local part = character:FindFirstChild("HumanoidRootPart")
+			local created = false
+			if part and part.ClassName ~= "MeshPart" then
+				part:Destroy()
+				part = nil
+			end
+			if not part then
+				part = newObject("MeshPart")
+				if part then
+					part.Name = "HumanoidRootPart"
+					created = true
+				end
+			end
+			if not part then
+				error("CreateDefaultRig could not create the capsule body", 2)
+			end
+
+			part.Size = options.BodySize or Vector3.new(1.3, 1.5, 1.3)
+			part.CFrame = spawn
+			part.Color = bodyColor
+			part.Material = Enum.Material.SmoothPlastic
+			part.Reflectance = 0
+			part.Metallic = 0
+			part.Roughness = 0.62
+			part.Transparency = 0
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanQuery = true
+			part.MeshScale = options.BodyMeshScale or 0.5
+			part.MeshId = roundedCubeMesh
+			if created then
+				part.Parent = character
+			end
+			self.RootPart = part
+			self.HipHeight = 0
 			character.PrimaryPart = self.RootPart
 			local animator = self:FindFirstChildOfClass("Animator") or newObject("Animator")
 			if animator and not animator.Parent then

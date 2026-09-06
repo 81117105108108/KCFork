@@ -80,8 +80,20 @@ return {
 				return
 			end
 			for _, child in pairs(instance:GetChildren()) do
-				if child["render"] then
+				if child["render"] and child.ManualRender ~= true then
+					if instance.OverrideScreenSize then
+						argon:Save(renderer.Window)
+						argon:ClipRoundRect(renderer.Window, {
+							x = instance.RenderOffset.X,
+							y = instance.RenderOffset.Y,
+							width = instance.Size.X.Offset,
+							height = instance.Size.Y.Offset,
+						}, 0, 0)
+					end
 					child.render(renderer.Window, child, renderer.RuntimeLibrary.dt, renderer)
+					if instance.OverrideScreenSize then
+						argon:Restore(renderer.Window)
+					end
 				end
 			end
 			profileEnd()

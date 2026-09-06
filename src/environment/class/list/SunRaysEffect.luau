@@ -23,6 +23,7 @@ return {
 			local isActive = instance.Parent == lighting and instance.Enabled
 			local intensity = math.clamp(instance.Intensity, 0, 1)
 			local spread = math.clamp(instance.Spread, 0.01, 1)
+
 			Argon:SetSunRays(renderer.Window, isActive, {
 				Density = 0.006 + intensity * 0.04,
 				MaximumOpacity = 0.2 + intensity * 0.75,

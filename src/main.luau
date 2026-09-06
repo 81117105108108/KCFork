@@ -344,6 +344,7 @@ else
 		width = 1000,
 		height = 800,
 		WGI = GetFlagValue("wgi") or (FlagExists("opengl") and "opengl" or "vulkan"),
+		enable3D = not FlagExists("2d"),
 		autoScale3D = autoScale3D,
 		max3DRenderPixels = if max3DRenderPixels > 0 then math.floor(max3DRenderPixels) else 0,
 		min3DRenderScale = min3DRenderScale,
@@ -369,8 +370,6 @@ kilang.renderer = renderer
 local Kinemium_env = require("./environment/get")
 
 local CEnv = kilang:init(Kinemium_camera, Kinemium_env)
-print("DEBUG kilang.env.print exists:", kilang.env.print ~= nil, "warn exists:", kilang.env.warn ~= nil)
-
 local game = kilang.env.game
 kilang.env.FlagExists = FlagExists
 kilang.env.GetFlagValue = GetFlagValue
@@ -446,7 +445,16 @@ local function loadInternals()
 
 	local loadedCount = 0
 	loop("src/sandboxed/internals", function(path, entry)
-		if kilang.threads[path] and pcall(coroutine.status, kilang.threads[path]) and coroutine.status(kilang.threads[path]) ~= "dead" then
+		local normalizedPath = normalizeScriptPath(path)
+		if normalizedPath:find("src/sandboxed/internals/gui/topbar/", 1, true) then
+			return
+		end
+
+		if
+			kilang.threads[path]
+			and pcall(coroutine.status, kilang.threads[path])
+			and coroutine.status(kilang.threads[path]) ~= "dead"
+		then
 			return
 		end
 
@@ -458,28 +466,13 @@ local function loadInternals()
 			return
 		end
 
+		local scriptContext = game:GetService("ScriptContext")
+
 		if isScriptPath(path) then
 			loadedCount += 1
 			task.spawn(function()
-				local threadid, success, result, f, n = kilang:execute(code, {
-					SecurityCapabilities = Enum.SecurityCapabilities.Internals,
-					StackId = path,
-				}, {
-					renderer = renderer,
-					require = function(path)
-						local success, result = pcall(function()
-							return require(path)
-						end)
-
-						if success then
-							return result
-						else
-							print(`Got result when trying to require path {path}: {result}`)
-							return {}
-						end
-					end,
-				})
-
+				scriptContext.RunSource(code, "Luau", path)
+				print("Running " .. path)
 				if not success and result ~= nil then
 					warn(`Error loading internal {threadid}: {tostring(result)}`)
 				end
@@ -512,7 +505,11 @@ function Kinemium:run()
 			end
 		end
 
-		if kilang.threads[path] and pcall(coroutine.status, kilang.threads[path]) and coroutine.status(kilang.threads[path]) ~= "dead" then
+		if
+			kilang.threads[path]
+			and pcall(coroutine.status, kilang.threads[path])
+			and coroutine.status(kilang.threads[path]) ~= "dead"
+		then
 			return
 		end
 
@@ -528,12 +525,6 @@ function Kinemium:run()
 		end
 
 		local superset = "kilang"
-
-		if entry.name:match("%.cpp$") then
-			superset = "cpp"
-		elseif entry.name:match("%.ts$") then
-			superset = "typescript"
-		end
 
 		loadedCount += 1
 		task.spawn(function()
@@ -551,12 +542,13 @@ function Kinemium:run()
 	log(string.format("[Scripts] Queued %d user scripts", loadedCount))
 end
 
--- ENGINE SIGNAL HANDLER
-game.EngineSignal:Connect(function(route)
-	if route == "playtest" then
-		Kinemium:playtest()
+function Kinemium:playtest()
+	local playtestService = game:GetService("PlaytestService")
+	if playtestService.IsPlaytesting then
+		return playtestService.StopCurrentPlaytest("game")
 	end
-end)
+	return playtestService.CreatePlaytestAsync("game")
+end
 
 -- KILANG REPL
 if FlagExists("kilang") then
@@ -579,22 +571,6 @@ if not FlagExists("no-internals") then
 end
 httpServerViewer:Init(renderer)
 Kinemium:run()
-
-if FlagExists("rojo") then
-	local port = GetFlagValue("rojo")
-	if not port or type(port) == "boolean" or type(port) == "string" and port == "" then
-		port = 3487
-	else
-		port = tonumber(port) or 3487
-	end
-	log("Rojo flag detected, connecting to Rojo server on port " .. tostring(port) .. "...")
-	local RojoSyncService = game:GetService("RojoSyncService")
-	if RojoSyncService then
-		task.spawn(function()
-			RojoSyncService:Connect(port)
-		end)
-	end
-end
 
 -- RUN RENDERER
 renderer:Run(60)

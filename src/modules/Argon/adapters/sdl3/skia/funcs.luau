@@ -330,6 +330,20 @@ export type Fns = {
 		alpha: number
 	) -> (),
 
+	Kine_Skia_Surface_DrawPixels: (
+		surface: FFIPointer,
+		pixels: FFIPointer,
+		sourceWidth: int,
+		sourceHeight: int,
+		sourceRowBytes: number,
+		x: float,
+		y: float,
+		width: float,
+		height: float,
+		flipY: number,
+		alpha: number
+	) -> (),
+
 	Kine_Skia_Surface_DrawImageRect: (
 		surface: FFIPointer,
 		image: FFIPointer,
@@ -528,7 +542,6 @@ local funcs = {
 			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
-			ffi.types.float,
 		},
 	},
 
@@ -564,7 +577,6 @@ local funcs = {
 			ffi.types.float,
 			ffi.types.float,
 			ffi.types.float,
-			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
@@ -929,6 +941,23 @@ local funcs = {
 			ffi.types.float, -- y
 			ffi.types.float, -- width
 			ffi.types.float, -- height
+			ffi.types.u8, -- alpha
+		},
+	},
+
+	Kine_Skia_Surface_DrawPixels = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- surface
+			ffi.types.pointer, -- RGBA pixels
+			ffi.types.i32, -- source width
+			ffi.types.i32, -- source height
+			ffi.types.u32, -- source row bytes
+			ffi.types.float, -- destination x
+			ffi.types.float, -- destination y
+			ffi.types.float, -- destination width
+			ffi.types.float, -- destination height
+			ffi.types.u8, -- C++ bool (one byte): flip vertically
 			ffi.types.u8, -- alpha
 		},
 	},

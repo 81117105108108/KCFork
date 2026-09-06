@@ -1,6 +1,6 @@
 material {
-    name : "KineDefault",
-    shadingModel : unlit,
+    name : "KineDecal",
+    shadingModel : lit,
     blending : transparent,
     depthWrite : false,
     doubleSided : true,
@@ -22,5 +22,7 @@ fragment {
             color *= texture(materialParams_baseColorMap, uv);
         }
         material.baseColor = color;
+        material.roughness = 0.85;
+        material.metallic = 0.0;
     }
 }

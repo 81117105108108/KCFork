@@ -10,6 +10,12 @@ return {
 			LimitsEnabled = false,
 			LowerAngle = -180,
 			UpperAngle = 180,
+			MotorEnabled = false,
+			AngularVelocity = 0,
+			MaxTorque = 1000,
+			CollideConnected = false,
+			Active = false,
+			JointID = nil,
 			Enabled = true,
 		})
 		return instance

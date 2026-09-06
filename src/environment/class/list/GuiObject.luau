@@ -151,6 +151,9 @@ local function calculateResolvedSize(object, parentSize, window, dt, renderer, d
 end
 
 local function GetAbsoluteSize(object, window, dt, renderer, depth)
+	if not object then
+		return ZERO_V
+	end
 	if object.BaseClass == "UIContainer" then
 		return vector.create(object.Size.X.Offset, object.Size.Y.Offset, 0)
 	end
@@ -161,8 +164,11 @@ local function GetAbsoluteSize(object, window, dt, renderer, depth)
 end
 
 local function getAbsoluteDrawPos(object, window, dt, renderer, depth)
+	if not object then
+		return ZERO_V
+	end
 	if object.BaseClass == "UIContainer" then
-		return object.RenderOffset
+		return object.RenderOffset or ZERO_V
 	end
 	local parent = object.Parent
 	local parentAbsPos = getAbsoluteDrawPos(parent, window, dt, renderer, (depth or 0) + 1)

@@ -420,8 +420,15 @@ local function doRun(commandIndex)
 	if not executable then
 		return fail(runtimeErr)
 	end
+	local manifest, manifestErr = Project.readManifest(projectPath)
+	if not manifest then
+		return fail(manifestErr)
+	end
 	table.insert(engineArgs, "--client")
 	table.insert(engineArgs, "--offline")
+	if manifest.info and string.upper(tostring(manifest.info.dimension or "3D")) == "2D" then
+		table.insert(engineArgs, "--2d")
+	end
 	table.insert(engineArgs, "--project")
 	table.insert(engineArgs, projectPath)
 	table.insert(engineArgs, "--project-readonly")

@@ -20,5 +20,7 @@ lib.Breadcrumb = require("./Immco/components/Breadcrumb")
 lib.ButtonGroup = require("./Immco/components/ButtonGroup")
 lib.Tabs = require("./Immco/components/Tabs")
 lib.Kbd = require("./Immco/components/Kbd")
+lib.PanZoomCanvas = require("./Immco/components/PanZoomCanvas")
+lib.Scene2DEditor = require("./Immco/components/Scene2DEditor")
 
 return lib

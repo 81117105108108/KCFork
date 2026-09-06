@@ -2,6 +2,7 @@ local ffi = zune.ffi
 local enet = require("@enet_ffi")
 local state = require("@GNS/state")
 local Serializer = require("@GNS/Serializer")
+local Delivery = require("./Delivery")
 local task = zune.task
 
 local Client = {}
@@ -21,7 +22,7 @@ local function pointerToBuffer(ptr, size)
 	return result
 end
 
-local function sendSerialized(peer, data, reliable)
+local function sendSerialized(peer, data, delivery)
 	local ok, serialized = pcall(Serializer.Serialize, data)
 	if not ok then
 		warn("[ENet][Client] Failed to serialize:", serialized)
@@ -31,7 +32,8 @@ local function sendSerialized(peer, data, reliable)
 	local size = buffer.len(serialized)
 	local payload = ffi.alloc(size)
 	payload:write(0, serialized, 0, size)
-	local sent = enet.lib.Kine_ENet_Peer_Send(peer, reliable and 0 or 1, payload, size, reliable and 1 or 0)
+	local channel, flags = Delivery.Resolve(delivery)
+	local sent = enet.lib.Kine_ENet_Peer_SendEx(peer, channel, payload, size, flags)
 	ffi.free(payload)
 	return sent ~= 0, size
 end
@@ -76,14 +78,14 @@ end
 local function openConnection(self)
 	destroyTransport(self)
 
-	local host = enet.lib.Kine_ENet_Host_Create(nil, 0, 1, 2, 0, 0)
+	local host = enet.lib.Kine_ENet_Host_Create(nil, 0, 1, Delivery.ChannelCount, 0, 0)
 	if not host or host == ffi.null then
 		warn("[ENet][Client] Failed to create client host")
 		return false
 	end
 
 	local address = stringToPtr(self.ServerAddress)
-	local peer = enet.lib.Kine_ENet_Host_Connect(host, address, self.ServerPort, 2, 0)
+	local peer = enet.lib.Kine_ENet_Host_Connect(host, address, self.ServerPort, Delivery.ChannelCount, 0)
 	ffi.free(address)
 	if not peer or peer == ffi.null then
 		enet.lib.Kine_ENet_Host_Destroy(host)
@@ -200,11 +202,11 @@ function Client:HandlePacket(msg)
 	end
 end
 
-function Client:Send(data, reliable)
+function Client:Send(data, delivery)
 	if not self.hConn or not self.EnetConnected then
 		return false
 	end
-	local sent, size = sendSerialized(self.hConn, data, reliable == true)
+	local sent, size = sendSerialized(self.hConn, data, delivery)
 	if sent then
 		self.Stats.bytesSent += size or 0
 		self.Stats.packetsSent += 1

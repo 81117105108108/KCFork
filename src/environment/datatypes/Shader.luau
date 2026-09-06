@@ -9,6 +9,8 @@ local function normalizeType(shaderType)
 		return "2d"
 	elseif shaderType == "material" then
 		return "surface"
+	elseif shaderType == "post" or shaderType == "post-processing" or shaderType == "postprocessing" then
+		return "postprocess"
 	end
 	return shaderType or "2d"
 end
@@ -25,6 +27,9 @@ end
 local function uniformValues(value)
 	if type(value) == "number" then
 		return { value }
+	end
+	if type(value) == "vector" then
+		return { value.X, value.Y, value.Z }
 	end
 	if type(value) ~= "table" then
 		return nil
@@ -63,6 +68,10 @@ end
 
 function Shader.fromMemorySurface(materialSource)
 	return Shader.new({ material = materialSource, _type = "surface" })
+end
+
+function Shader.fromMemoryPostProcess(materialSource)
+	return Shader.new({ material = materialSource, _type = "postprocess" })
 end
 
 function Shader.fromMemorySky(source)
@@ -110,7 +119,7 @@ function Shader:Compile(target)
 	local handle, compileError
 	if self._type == "2d" then
 		handle, compileError = argon:CreateRuntimeShader(self._source)
-	elseif self._type == "surface" then
+	elseif self._type == "surface" or self._type == "postprocess" then
 		local window = target and (target.Window or target)
 		if not window then
 			return false, "A rendering window is required to compile a Filament material"
@@ -138,7 +147,7 @@ function Shader:_applyUniform(name, values)
 		return true
 	elseif self._type == "2d" then
 		return argon:SetRuntimeShaderUniform(self._shader, name, values)
-	elseif self._type == "surface" then
+	elseif self._type == "surface" or self._type == "postprocess" then
 		return argon:SetMaterialShaderUniform(self._shader, name, values)
 	elseif self._type == "sky" then
 		return true
@@ -163,8 +172,8 @@ function Shader:SetSampler()
 end
 
 function Shader:ApplyGlobal(target)
-	if self._type ~= "surface" and self._type ~= "sky" then
-		return false, "Only Filament surface and sky shaders can be applied globally"
+	if self._type ~= "surface" and self._type ~= "sky" and self._type ~= "postprocess" then
+		return false, "Only Filament surface, post-process, and sky shaders can be applied globally"
 	end
 	local ok, compileError = self:Compile(target)
 	if not ok then
@@ -186,7 +195,18 @@ function Shader:ApplyGlobal(target)
 		)
 		return true
 	end
+	if self._type == "postprocess" then
+		return argon:SetFilamentPostProcessShader(window, self._shader)
+	end
 	return argon:SetGlobalMaterialShader(window, self._shader)
+end
+
+function Shader:Clone()
+	local copy = Shader.new({ _type = self._type, material = self._source, sksl = self._source, source = self._source })
+	for name, values in pairs(self._uniforms) do
+		copy._uniforms[name] = table.clone(values)
+	end
+	return copy
 end
 
 function Shader:Unload()
@@ -195,7 +215,7 @@ function Shader:Unload()
 	end
 	if self._type == "2d" then
 		argon:DestroyRuntimeShader(self._shader)
-	elseif self._type == "surface" then
+	elseif self._type == "surface" or self._type == "postprocess" then
 		argon:DestroyMaterialShader(self._shader)
 	end
 	self._shader = nil

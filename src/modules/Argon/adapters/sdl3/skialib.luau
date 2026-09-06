@@ -378,6 +378,34 @@ function SkiaAdapter:DrawImageSized(skiaSurface, image: typedefs.Image, rect: ty
 	)
 end
 
+function SkiaAdapter:DrawPixels(
+	skiaSurface,
+	pixels,
+	sourceWidth: number,
+	sourceHeight: number,
+	sourceRowBytes: number,
+	rect: typedefs.Rectangle,
+	flipY: boolean?,
+	alpha: number?
+)
+	if not pixels or pixels == zune.ffi.null then
+		return
+	end
+	skia.lib.Kine_Skia_Surface_DrawPixels(
+		skiaSurface,
+		pixels,
+		sourceWidth,
+		sourceHeight,
+		sourceRowBytes,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		flipY and 1 or 0,
+		math.floor(math.clamp(alpha or 1, 0, 1) * 255 + 0.5)
+	)
+end
+
 function SkiaAdapter:DrawImageRect(
 	skiaSurface,
 	image: typedefs.Image,

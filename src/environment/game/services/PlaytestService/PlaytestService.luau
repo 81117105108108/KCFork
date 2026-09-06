@@ -1,142 +1,164 @@
 local Instance = require("@Instance")
+local signal = require("@Kinemium.signal")
 
 local PlaytestService = Instance.new("PlaytestService")
 PlaytestService.ExplorerHidden = true
 
-local signal = require("@Kinemium.signal")
-
 local task = zune.task
+local serverProcess = nil
+local clientProcess = nil
+local logTasks = {}
+local currentFile = nil
 
-local function outputProcess(prefix, proc, cb)
-	local buffer = ""
-	return task.spawn(function()
-		while true do
-			local err = proc.stderr:read(1024)
-
-			if err and #err > 0 then
-				buffer ..= err
-
-				while true do
-					local lineEnd = string.find(buffer, "\n")
-
-					if not lineEnd then
-						break
-					end
-
-					local line = string.sub(buffer, 1, lineEnd - 1)
-					buffer = string.sub(buffer, lineEnd + 1)
-
-					if #line > 0 then
-						if cb then
-							cb(line)
-						end
-						print(prefix, line)
-					end
-				end
-			end
-
-			task.wait(0.01)
-		end
-	end)
+local function stopLogTasks()
+	for _, logger in ipairs(logTasks) do
+		pcall(task.cancel, logger)
+	end
+	table.clear(logTasks)
 end
 
-local server_process: ProcessChild
-local client_process: ProcessChild
+local function pumpStream(prefix, stream, event)
+	if not stream then
+		return
+	end
+	local logger = task.spawn(function()
+		local buffer = ""
+		while true do
+			local ok, chunk = pcall(function()
+				return stream:read(1024)
+			end)
+			if not ok or not chunk then
+				break
+			end
+			if #chunk == 0 then
+				task.wait(0.01)
+				continue
+			end
+			buffer ..= chunk
+			while true do
+				local lineEnd = string.find(buffer, "\n", 1, true)
+				if not lineEnd then
+					break
+				end
+				local line = string.sub(buffer, 1, lineEnd - 1):gsub("\r$", "")
+				buffer = string.sub(buffer, lineEnd + 1)
+				if #line > 0 then
+					event:Fire(line)
+					print(prefix, line)
+				end
+			end
+		end
+		if #buffer > 0 then
+			event:Fire(buffer)
+			print(prefix, buffer)
+		end
+	end)
+	table.insert(logTasks, logger)
+end
 
-local client_logger
-local server_logger
+local function killProcess(process)
+	if process then
+		task.spawn(function()
+			pcall(function()
+				process:kill()
+			end)
+		end)
+	end
+end
 
-PlaytestService.InitRenderer = function(renderer, renderer_signal, datamodel)
+PlaytestService.InitRenderer = function(renderer, rendererSignal, datamodel)
 	PlaytestService:SetProperties({
 		OnClientLog = signal.new(),
 		OnServerLog = signal.new(),
-
 		OnPlaytestStarted = signal.new(),
 		OnPlaytestFinished = signal.new(),
+		IsPlaytesting = false,
+	})
 
-		CreatePlaytestAsync = function(gameName)
-			pcall(function()
-				zune.fs.deleteFile("./.temp/" .. gameName .. ".kine")
-			end)
+	local function stopCurrentPlaytest(gameName)
+		if not PlaytestService.IsPlaytesting and not serverProcess and not clientProcess then
+			return false
+		end
+		stopLogTasks()
+		killProcess(clientProcess)
+		killProcess(serverProcess)
+		clientProcess = nil
+		serverProcess = nil
+		PlaytestService.IsPlaytesting = false
+		PlaytestService.OnPlaytestFinished:Fire()
+		local path = currentFile or ("./.temp/" .. tostring(gameName or "game") .. ".kine")
+		currentFile = nil
+		pcall(zune.fs.deleteFile, path)
+		return true
+	end
 
-			PlaytestService.OnPlaytestStarted:Fire()
+	local function createPlaytest(gameName)
+		gameName = tostring(gameName or "game")
+		if PlaytestService.IsPlaytesting then
+			stopCurrentPlaytest(gameName)
+		end
 
-			local KineFileService = datamodel:GetService("KineFileService")
+		zune.fs.makeDir("./.temp", true)
+		currentFile = "./.temp/" .. gameName .. ".kine"
+		pcall(zune.fs.deleteFile, currentFile)
 
-			KineFileService.ExportGameAsFile("./.temp/", gameName)
+		local KineFileService = datamodel:GetService("KineFileService")
+		local serialized = KineFileService.ExportGameAsFile("./.temp", gameName)
+		if not serialized then
+			currentFile = nil
+			return nil, "failed to export the playtest place"
+		end
 
-			local Process = datamodel:GetService("Process")
+		local username = GetFlagValue("username")
+			or zune.process.env["USERNAME"]
+			or zune.process.env["USER"]
+			or "Player"
+		local port = tonumber(GetFlagValue("port")) or 1234
+		local Process = datamodel:GetService("Process")
+		local ioOptions = { stdout = "piped", stderr = "piped" }
 
-			task.spawn(function()
-				server_process = Process.CreateKinemiumServerProcess({
-					"--headless",
-					"--blob",
-					"./.temp/" .. gameName .. ".kine",
-				})
-				server_logger = outputProcess("[SERVER]", server_process, function(line)
-					PlaytestService.OnServerLog:Fire(line)
-				end)
-			end)
+		serverProcess = Process.RunProcessZune({
+			"run", "game", "--server", "--kilang", "--headless",
+			"--blob", currentFile, "--address", "127.0.0.1", "--port", tostring(port),
+		}, ioOptions)
+		if not serverProcess then
+			return nil, "failed to launch the playtest server"
+		end
 
-			task.spawn(function()
-				-- wait 2 seconds for the server to startup
-				task.wait(2)
+		PlaytestService.IsPlaytesting = true
+		PlaytestService.OnPlaytestStarted:Fire()
+		pumpStream("[SERVER]", serverProcess.stdout, PlaytestService.OnServerLog)
+		pumpStream("[SERVER]", serverProcess.stderr, PlaytestService.OnServerLog)
 
-				local playerName = "Player"
-				pcall(function()
-					local players = datamodel:GetService("Players")
-					if players and players.LocalPlayer and players.LocalPlayer.Name then
-						playerName = players.LocalPlayer.Name
-					end
-				end)
-				if playerName == "Player" then
-					pcall(function()
-						local envName = zune.process.env["USERNAME"] or zune.process.env["USER"]
-						if envName and #envName > 0 then
-							playerName = envName
-						end
-					end)
-				end
+		task.spawn(function()
+			task.wait(0.75)
+			if not PlaytestService.IsPlaytesting then
+				return
+			end
+			clientProcess = Process.RunProcessZune({
+				"run", "game", "--client", "--username", tostring(username),
+				"--blob", currentFile, "--address", "127.0.0.1", "--port", tostring(port),
+				"--max3dpixels", "144000", "--perfoverlay",
+			}, ioOptions)
+			if clientProcess then
+				pumpStream("[CLIENT]", clientProcess.stdout, PlaytestService.OnClientLog)
+				pumpStream("[CLIENT]", clientProcess.stderr, PlaytestService.OnClientLog)
+			else
+				warn("Failed to launch the playtest client")
+				stopCurrentPlaytest(gameName)
+			end
+		end)
 
-				client_process = Process.CreateKinemiumClientProcess({
-					"--username " .. playerName,
-				})
-				client_logger = outputProcess("[CLIENT]", client_process, function(line)
-					PlaytestService.OnClientLog:Fire(line)
-				end)
-			end)
+		return true
+	end
+
+	PlaytestService:SetProperties({
+		CreatePlaytestAsync = function(first, second)
+			return createPlaytest(first == PlaytestService and second or first)
 		end,
-
-		StopCurrentPlaytest = function(gameName)
-			PlaytestService.OnPlaytestFinished:Fire()
-
-			pcall(function()
-				zune.fs.deleteFile("./.temp/" .. gameName .. ".kine")
-			end)
-			if client_logger then
-				task.cancel(client_logger)
-			end
-			if server_logger then
-				task.cancel(server_logger)
-			end
-
-			if client_process then
-				task.spawn(function()
-					pcall(function()
-						client_process:kill()
-					end)
-				end)
-			end
-			if server_process then
-				task.spawn(function()
-					pcall(function()
-						server_process:kill()
-					end)
-				end)
-			end
+		StopCurrentPlaytest = function(first, second)
+			return stopCurrentPlaytest(first == PlaytestService and second or first)
 		end,
-
-		IsPlaytesting = true,
 	})
 end
 

@@ -37,6 +37,8 @@
 #include "modules/skshaper/include/SkShaper.h"
 #include "modules/skshaper/include/SkShaper_skunicode.h"
 #include "modules/skshaper/include/SkShaper_harfbuzz.h"
+#include "include/core/SkStream.h"
+#include "modules/svg/include/SkSVGDOM.h"
 
 #ifndef KINE_SKIA_BUILD_VULKAN
 #define KINE_SKIA_BUILD_VULKAN 0
@@ -76,6 +78,10 @@ struct KineSkiaSurface {
 
 struct KineSkiaImage {
     sk_sp<SkImage> image;
+    sk_sp<SkSVGDOM> svg;
+
+    float width = 0.0f;
+    float height = 0.0f;
 };
 
 struct KineSkiaVulkanContext {
@@ -264,6 +270,105 @@ static sk_sp<SkTypeface> kine_skia_get_typeface(const char* fontPath)
 
     cache[key] = tf;
     return tf;
+}
+
+static sk_sp<SkSVGDOM> kine_skia_decode_svg(
+    const sk_sp<SkData>& data,
+    float* outWidth,
+    float* outHeight)
+{
+    if (!data || data->isEmpty()) {
+        return nullptr;
+    }
+
+    SkMemoryStream stream(data);
+
+    sk_sp<SkSVGDOM> svg = SkSVGDOM::MakeFromStream(stream);
+    if (!svg) {
+        return nullptr;
+    }
+
+    const SkSize size = svg->containerSize();
+
+    float width = size.width();
+    float height = size.height();
+
+    if (width <= 0.0f && height <= 0.0f) {
+        width = 100.0f;
+        height = 100.0f;
+    } else if (width <= 0.0f) {
+        width = height;
+    } else if (height <= 0.0f) {
+        height = width;
+    }
+
+    if (outWidth) {
+        *outWidth = width;
+    }
+
+    if (outHeight) {
+        *outHeight = height;
+    }
+
+    return svg;
+}
+
+static void kine_skia_draw_svg(
+    SkCanvas* canvas,
+    KineSkiaImage* image,
+    float x,
+    float y,
+    float width,
+    float height,
+    uint8_t alpha)
+{
+    if (!canvas || !image || !image->svg ||
+        width <= 0.0f || height <= 0.0f) {
+        return;
+    }
+
+    const float sourceWidth =
+        image->width > 0.0f ? image->width : width;
+
+    const float sourceHeight =
+        image->height > 0.0f ? image->height : height;
+
+    const float scaleX = width / sourceWidth;
+    const float scaleY = height / sourceHeight;
+
+    SkAutoCanvasRestore restore(canvas, true);
+
+    canvas->translate(x, y);
+
+    // Clip in destination coordinates.
+    canvas->clipRect(
+        SkRect::MakeWH(width, height),
+        SkClipOp::kIntersect,
+        true
+    );
+
+    // pngtosvg emits fixed pixel coordinates without a viewBox,
+    // so explicitly scale the original SVG coordinate space.
+    canvas->scale(scaleX, scaleY);
+
+    // Keep the DOM at its original/intrinsic size.
+    image->svg->setContainerSize(
+        SkSize::Make(sourceWidth, sourceHeight)
+    );
+
+    if (alpha < 255) {
+        SkPaint alphaPaint;
+        alphaPaint.setAlphaf(alpha / 255.0f);
+
+        const SkRect bounds =
+            SkRect::MakeWH(sourceWidth, sourceHeight);
+
+        canvas->saveLayer(&bounds, &alphaPaint);
+        image->svg->render(canvas);
+        canvas->restore();
+    } else {
+        image->svg->render(canvas);
+    }
 }
 
 extern "C" {
@@ -1083,33 +1188,94 @@ KINE_SKIA_API KineSkiaImage* Kine_Skia_Image_LoadFromFile(const char* path)
         return nullptr;
     }
 
-    sk_sp<SkImage> image = SkImages::DeferredFromEncodedData(data);
-    if (!image) {
-        fprintf(stderr, "kine_skia: failed to decode image '%s'\n", path);
-        return nullptr;
+    sk_sp<SkImage> raster = SkImages::DeferredFromEncodedData(data);
+
+    if (raster) {
+        auto* wrapper = new KineSkiaImage();
+
+        wrapper->width = static_cast<float>(raster->width());
+        wrapper->height = static_cast<float>(raster->height());
+        wrapper->image = std::move(raster);
+
+        return wrapper;
     }
 
-    KineSkiaImage* wrapper = new KineSkiaImage();
-    wrapper->image = std::move(image);
-    return wrapper;
+    float width = 0.0f;
+    float height = 0.0f;
+
+    sk_sp<SkSVGDOM> svg = kine_skia_decode_svg(
+        data,
+        &width,
+        &height
+    );
+
+    if (svg) {
+        auto* wrapper = new KineSkiaImage();
+
+        wrapper->svg = std::move(svg);
+        wrapper->width = width;
+        wrapper->height = height;
+
+        return wrapper;
+    }
+
+    fprintf(
+        stderr,
+        "kine_skia: failed to decode raster or SVG image '%s'\n",
+        path
+    );
+
+    return nullptr;
 }
 
-KINE_SKIA_API KineSkiaImage* Kine_Skia_Image_LoadFromMemory(const uint8_t* data, size_t size)
+KINE_SKIA_API KineSkiaImage* Kine_Skia_Image_LoadFromMemory(
+    const uint8_t* data,
+    size_t size)
 {
     if (!data || size == 0) {
         return nullptr;
     }
 
     sk_sp<SkData> skData = SkData::MakeWithCopy(data, size);
-    sk_sp<SkImage> image = SkImages::DeferredFromEncodedData(skData);
-    if (!image) {
-        fprintf(stderr, "kine_skia: failed to decode image from memory buffer\n");
-        return nullptr;
+
+    sk_sp<SkImage> raster =
+        SkImages::DeferredFromEncodedData(skData);
+
+    if (raster) {
+        auto* wrapper = new KineSkiaImage();
+
+        wrapper->width = static_cast<float>(raster->width());
+        wrapper->height = static_cast<float>(raster->height());
+        wrapper->image = std::move(raster);
+
+        return wrapper;
     }
 
-    KineSkiaImage* wrapper = new KineSkiaImage();
-    wrapper->image = std::move(image);
-    return wrapper;
+    float width = 0.0f;
+    float height = 0.0f;
+
+    sk_sp<SkSVGDOM> svg = kine_skia_decode_svg(
+        skData,
+        &width,
+        &height
+    );
+
+    if (svg) {
+        auto* wrapper = new KineSkiaImage();
+
+        wrapper->svg = std::move(svg);
+        wrapper->width = width;
+        wrapper->height = height;
+
+        return wrapper;
+    }
+
+    fprintf(
+        stderr,
+        "kine_skia: failed to decode raster or SVG image from memory buffer\n"
+    );
+
+    return nullptr;
 }
 
 KINE_SKIA_API void Kine_Skia_Image_Destroy(KineSkiaImage* image)
@@ -1119,41 +1285,77 @@ KINE_SKIA_API void Kine_Skia_Image_Destroy(KineSkiaImage* image)
 
 KINE_SKIA_API int Kine_Skia_Image_GetWidth(const KineSkiaImage* image)
 {
-    return image && image->image ? image->image->width() : 0;
+    if (!image) {
+        return 0;
+    }
+
+    return static_cast<int>(std::round(image->width));
 }
 
 KINE_SKIA_API int Kine_Skia_Image_GetHeight(const KineSkiaImage* image)
 {
-    return image && image->image ? image->image->height() : 0;
+    if (!image) {
+        return 0;
+    }
+
+    return static_cast<int>(std::round(image->height));
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawImage(
     KineSkiaSurface* surface,
     KineSkiaImage* image,
-    float x, float y,
+    float x,
+    float y,
     uint8_t alpha)
 {
-    if (!surface || !surface->surface || !image || !image->image) {
+    if (!surface || !surface->surface || !image) {
+        return;
+    }
+
+    if (image->svg) {
+        kine_skia_draw_svg(
+            surface->surface->getCanvas(),
+            image,
+            x,
+            y,
+            image->width,
+            image->height,
+            alpha
+        );
+
+        return;
+    }
+
+    if (!image->image) {
         return;
     }
 
     SkPaint paint;
     paint.setAntiAlias(true);
+
     if (alpha < 255) {
         paint.setAlphaf(alpha / 255.0f);
     }
 
-    surface->surface->getCanvas()->drawImage(image->image, x, y, SkSamplingOptions(), &paint);
+    surface->surface->getCanvas()->drawImage(
+        image->image,
+        x,
+        y,
+        SkSamplingOptions(),
+        &paint
+    );
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
     KineSkiaSurface* surface,
     KineSkiaImage* image,
-    float x, float y,
-    float width, float height,
+    float x,
+    float y,
+    float width,
+    float height,
     uint8_t alpha)
 {
-    if (!surface || !surface->surface || !image || !image->image) {
+    if (!surface || !surface->surface || !image) {
         return;
     }
 
@@ -1161,6 +1363,24 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
         return;
     }
 
+    if (image->svg) {
+        kine_skia_draw_svg(
+            surface->surface->getCanvas(),
+            image,
+            x,
+            y,
+            width,
+            height,
+            alpha
+        );
+
+        return;
+    }
+
+    if (!image->image) {
+        return;
+    }
+
     SkPaint paint;
     paint.setAntiAlias(true);
 
@@ -1168,7 +1388,8 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
         paint.setAlphaf(alpha / 255.0f);
     }
 
-    SkRect dst = SkRect::MakeXYWH(x, y, width, height);
+    const SkRect dst =
+        SkRect::MakeXYWH(x, y, width, height);
 
     surface->surface->getCanvas()->drawImageRect(
         image->image,
@@ -1176,6 +1397,51 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
         SkSamplingOptions(SkFilterMode::kLinear),
         &paint
     );
+}
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawPixels(
+    KineSkiaSurface* surface,
+    const void* pixels,
+    int sourceWidth, int sourceHeight,
+    uint32_t sourceRowBytes,
+    float x, float y,
+    float width, float height,
+    bool flipY,
+    uint8_t alpha)
+{
+    if (!surface || !surface->surface || !pixels ||
+        sourceWidth <= 0 || sourceHeight <= 0 || sourceRowBytes == 0 ||
+        width <= 0.0f || height <= 0.0f) {
+        return;
+    }
+
+    SkImageInfo info = SkImageInfo::Make(
+        sourceWidth,
+        sourceHeight,
+        kRGBA_8888_SkColorType,
+        kPremul_SkAlphaType);
+    SkPixmap pixmap(info, pixels, sourceRowBytes);
+    sk_sp<SkImage> image = SkImages::RasterFromPixmapCopy(pixmap);
+    if (!image) return;
+
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    if (alpha < 255) paint.setAlphaf(alpha / 255.0f);
+
+    SkCanvas* canvas = surface->surface->getCanvas();
+    canvas->save();
+    if (flipY) {
+        canvas->translate(x, y + height);
+        canvas->scale(1.0f, -1.0f);
+        x = 0.0f;
+        y = 0.0f;
+    }
+    canvas->drawImageRect(
+        image,
+        SkRect::MakeXYWH(x, y, width, height),
+        SkSamplingOptions(SkFilterMode::kLinear),
+        &paint);
+    canvas->restore();
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawImageOutlineSized(

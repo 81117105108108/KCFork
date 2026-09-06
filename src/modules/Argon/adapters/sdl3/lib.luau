@@ -39,6 +39,8 @@ local SDL_EVENT_KEY_DOWN = 0x300
 local SDL_EVENT_TEXT_INPUT = 0x303
 
 local eventPtr = zune.ffi.alloc(128)
+local mousePositionXPtr = zune.ffi.alloc(4)
+local mousePositionYPtr = zune.ffi.alloc(4)
 local mouseDown = {}
 local mousePressed = {}
 local mouseReleased = {}
@@ -145,16 +147,33 @@ function SDLAdapter:StopTextInput(window: typedefs.Window)
 end
 
 local function readCString(strPtr, maxLen: number?)
+	if not strPtr or strPtr == zune.ffi.null then
+		return ""
+	end
+
 	local bytes = {}
-	local limit = maxLen or 256
-	for i = 0, limit - 1 do
+	local i = 0
+
+	while maxLen == nil or i < maxLen do
 		local b = strPtr:readu8(i)
+
 		if b == 0 then
 			break
 		end
+
 		bytes[#bytes + 1] = string.char(b)
+		i += 1
 	end
+
 	return table.concat(bytes)
+end
+
+function SDLAdapter:ResizeVulkanCompositor(window: typedefs.Window, width: number, height: number): boolean
+	if not window_real(window) or window.WGI ~= "vulkan" or not window._vulkanCompositor then
+		return false
+	end
+
+	return vulkan_compositor.lib.Kine_VulkanCompositor_Resize(window._vulkanCompositor, width, height) ~= 0
 end
 
 function SDLAdapter:ClipRoundRect(window: typedefs.Window, rect: typedefs.Rectangle, radiusX, radiusY)
@@ -207,7 +226,7 @@ function SDLAdapter:Init3D(window: typedefs.Window)
 	filament:Init(window)
 	if window.WGI == "vulkan" and window._3dhandle and window._3dhandle ~= zune.ffi.null then
 		local compositor = filament:GetVulkanCompositor(window)
-		if compositor then
+		if compositor and not window._vulkanCompositor then
 			window._vulkanCompositor = compositor
 			window._vulkanCompositorOwnedByFilament = true
 			window._vulkanCompositorCreationFailedFor = nil
@@ -415,6 +434,42 @@ function SDLAdapter:CreateMesh(window: typedefs.Window, meshType: string)
 	return filament:CreateMesh(window, meshType)
 end
 
+function SDLAdapter:CreateLight(window: typedefs.Window, lightType: string, options)
+	return filament:CreateLight(window, lightType, options)
+end
+
+function SDLAdapter:UpdateLight(window: typedefs.Window, light: typedefs.Light, options)
+	return filament:UpdateLight(window, light, options)
+end
+
+function SDLAdapter:RemoveLight(window: typedefs.Window, light: typedefs.Light?)
+	return filament:RemoveLight(window, light)
+end
+
+function SDLAdapter:CreateFilamentViewport(width: number, height: number)
+	return filament:CreateViewport(width, height)
+end
+
+function SDLAdapter:SetFilamentPostProcessShader(window: typedefs.Window, shader)
+	return filament:SetPostProcessShader(window, shader)
+end
+
+function SDLAdapter:ResizeFilamentViewport(viewport, width: number, height: number)
+	return filament:ResizeViewport(viewport, width, height)
+end
+
+function SDLAdapter:SetFilamentViewportCamera(viewport, position, target, fieldOfView: number?)
+	return filament:SetViewportCamera(viewport, position, target, fieldOfView)
+end
+
+function SDLAdapter:RenderFilamentViewport(viewport, dt: number)
+	return filament:RenderViewport(viewport, dt)
+end
+
+function SDLAdapter:DestroyFilamentViewport(viewport)
+	return filament:DestroyViewport(viewport)
+end
+
 function SDLAdapter:CreateMeshFromPath(window: typedefs.Window, path: string)
 	return filament:CreateMeshFromPath(window, zembed.AssetPath(path))
 end
@@ -512,6 +567,7 @@ function SDLAdapter:UpdateSurface3DTexture(window: typedefs.Window, texture, sur
 end
 
 function SDLAdapter:CreateMeshTexture(window: typedefs.Window, path: string)
+	path = zembed.AssetPath(path)
 	local albedo, albedoSurface = loadRgbaImage(path)
 	if not albedo then
 		return nil
@@ -646,6 +702,22 @@ function SDLAdapter:DrawImageSized(
 	ui:DrawImageSized(window._uihandle, image, rect, alpha)
 end
 
+function SDLAdapter:DrawPixels(
+	window: typedefs.Window,
+	pixels,
+	sourceWidth: number,
+	sourceHeight: number,
+	sourceRowBytes: number,
+	rect: typedefs.Rectangle,
+	flipY: boolean?,
+	alpha: number?
+)
+	if not window_real(window) or not pixels then
+		return
+	end
+	ui:DrawPixels(window._uihandle, pixels, sourceWidth, sourceHeight, sourceRowBytes, rect, flipY, alpha)
+end
+
 function SDLAdapter:DrawImageRect(
 	window: typedefs.Window,
 	image: typedefs.Image,
@@ -685,7 +757,7 @@ function SDLAdapter:BeginFrame(context: typedefs.RenderingContext)
 		context.Window._vulkanCompositorFrameActive = false
 		context.Window._vulkanCompositorOverlaySurface = nil
 		local filamentCompositor = filament:GetVulkanCompositor(context.Window)
-		if filamentCompositor then
+		if filamentCompositor and not context.Window._vulkanCompositor then
 			context.Window._vulkanCompositor = filamentCompositor
 			context.Window._vulkanCompositorOwnedByFilament = true
 		end
@@ -1167,16 +1239,10 @@ function SDLAdapter:SetActiveTranslationLayer(name: string)
 end
 
 function SDLAdapter:GetMousePosition(): typedefs.Vector
-	local x = zune.ffi.alloc(4)
-	local y = zune.ffi.alloc(4)
+	sdl.lib.SDL_GetMouseState(mousePositionXPtr, mousePositionYPtr)
 
-	sdl.lib.SDL_GetMouseState(x, y)
-
-	local mouseX = x:readf32(0)
-	local mouseY = y:readf32(0)
-
-	zune.ffi.free(x)
-	zune.ffi.free(y)
+	local mouseX = mousePositionXPtr:readf32(0)
+	local mouseY = mousePositionYPtr:readf32(0)
 
 	return {
 		X = mouseX,
@@ -1396,8 +1462,13 @@ function SDLAdapter:Shutdown(window: typedefs.Window, renderer: typedefs.Rendere
 	if not window_real(window) then
 		return
 	end
-	if window._vulkanCompositor and not window._vulkanCompositorOwnedByFilament then
-		vulkan_compositor.lib.Kine_VulkanCompositor_Destroy(window._vulkanCompositor)
+	local standaloneCompositor = if window._vulkanCompositor and not window._vulkanCompositorOwnedByFilament
+		then window._vulkanCompositor
+		else nil
+	-- Filament may reference a standalone compositor; release its context first.
+	filament:Shutdown(window)
+	if standaloneCompositor then
+		vulkan_compositor.lib.Kine_VulkanCompositor_Destroy(standaloneCompositor)
 		window._vulkanCompositor = nil
 		window._vulkanCompositorSkiaContext = nil
 		window._vulkanCompositorError = nil
@@ -1418,7 +1489,6 @@ function SDLAdapter:Shutdown(window: typedefs.Window, renderer: typedefs.Rendere
 		end
 	end
 	table.clear(imageCache)
-	filament:Shutdown(window)
 	if renderer and renderer._handle then
 		sdl.lib.SDL_DestroyRenderer(renderer._handle)
 	end
@@ -1463,6 +1533,19 @@ function SDLAdapter:Set3DViewport(window: typedefs.Window, x: number?, y: number
 	if window.WGI == "vulkan" then
 		filament:SetViewport(window, x, y, width, height)
 	end
+end
+
+function SDLAdapter:SetCameraPerspective(
+	window: typedefs.Window,
+	fieldOfView: number,
+	aspect: number,
+	nearPlane: number?,
+	farPlane: number?
+)
+	if not window_real(window) then
+		return
+	end
+	filament:SetCameraPerspective(window, fieldOfView, aspect, nearPlane, farPlane)
 end
 
 function SDLAdapter:RGBA(r, g, b, a: number?): typedefs.RGBA

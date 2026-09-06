@@ -1,7 +1,3 @@
--- Coalesces native-constraint rebuilds and always crosses a scheduler boundary.
--- Some runtimes execute long chains of task.defer callbacks in one C call path;
--- constraints retrying before their replicated bodies exist could consequently
--- overflow the C stack and also spin hard enough to starve physics.
 local ConstraintRetry = {}
 local states = setmetatable({}, { __mode = "k" })
 
@@ -39,10 +35,7 @@ function ConstraintRetry.Schedule(owner, callback, delaySeconds)
 
 	state.pending = true
 	local generation = state.generation
-	-- Zune may execute task.delay(0) in the current C callback chain. A burst of
-	-- replicated property/ownership changes can then recursively rebuild hundreds
-	-- of constraints and overflow the C stack. Always cross at least one scheduler
-	-- slice, even when callers request an immediate rebuild.
+
 	local delay = math.max(delaySeconds or 0.05, 0.001)
 	task.delay(delay, function()
 		if state.generation ~= generation then

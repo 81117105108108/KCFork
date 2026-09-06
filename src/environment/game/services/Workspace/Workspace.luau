@@ -44,6 +44,7 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		cube = argon:CreateMesh(renderer.Window, "cube"),
 		displacedCube = argon:CreateMesh(renderer.Window, "displacedCube"),
 		sphere = argon:CreateMesh(renderer.Window, "sphere"),
+		cylinder = argon:CreateMesh(renderer.Window, "cylinder"),
 	}
 	Workspace.MeshesPreset = meshes
 
@@ -124,6 +125,9 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		if shape == Enum.PartType.Ball then
 			return meshes.sphere
 		end
+		if shape == Enum.PartType.Cylinder then
+			return meshes.cylinder
+		end
 		if displacedMaterials[material] then
 			return meshes.displacedCube
 		end
@@ -147,6 +151,9 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		MeshObject = true,
 		_mesh = true,
 		MeshScale = true,
+		TextureID = true,
+		TextureId = true,
+		_meshTexture = true,
 	}
 	local transformProperties = {
 		CFrame = true,
@@ -188,6 +195,9 @@ Workspace.InitRenderer = function(renderer, signal, game)
 	end
 
 	local function addTree(object)
+		if object.ClassName == "MaterialShader" then
+			metadataDirty = true
+		end
 		addPart(object)
 		for _, descendant in pairs(object:GetDescendants()) do
 			addPart(descendant)
@@ -195,6 +205,9 @@ Workspace.InitRenderer = function(renderer, signal, game)
 	end
 
 	local function removeTree(object)
+		if object.ClassName == "MaterialShader" then
+			metadataDirty = true
+		end
 		removePart(object)
 		for _, descendant in pairs(object:GetDescendants()) do
 			removePart(descendant)
@@ -207,6 +220,10 @@ Workspace.InitRenderer = function(renderer, signal, game)
 	local descendantAdded = Workspace.DescendantAdded:Connect(addTree)
 	local descendantRemoving = Workspace.DescendantRemoving:Connect(removeTree)
 	local descendantChanged = Workspace.DescendantChanged:Connect(function(object, property)
+		if object.ClassName == "MaterialShader" then
+			metadataDirty = true
+			return
+		end
 		if not renderPartIndices[object] then
 			return
 		end
@@ -222,19 +239,20 @@ Workspace.InitRenderer = function(renderer, signal, game)
 	end)
 
 	local function getRenderableMesh(object, props, material)
-		if props.ClassName == "MeshPart" then
-			local mesh = props._mesh
-				or (props.MeshObject and (props.MeshObject._mesh or props.MeshObject._meshgenHandle))
-			if mesh and mesh._handle then
-				return mesh
-			end
+		local mesh = props._mesh
+			or (props.MeshObject and (props.MeshObject._mesh or props.MeshObject._meshgenHandle))
+		if mesh and mesh._handle then
+			return mesh
 		end
 		return getMeshForShape(props.Shape, material)
 	end
 
 	local function getRenderScale(props)
-		local size = props.Size
 		local meshScale = tonumber(props.MeshScale) or 1
+		if props._meshUsesPartSize == false then
+			return Vector3.new(meshScale, meshScale, meshScale)
+		end
+		local size = props.Size
 		if props.ClassName == "MeshPart" and meshScale ~= 1 then
 			return Vector3.new(size.X * meshScale, size.Y * meshScale, size.Z * meshScale)
 		end
@@ -245,6 +263,15 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		drawCall.matrix = nil
 		drawCall.cframe = props.CFrame
 		drawCall.scale = getRenderScale(props)
+	end
+
+	local function getPartShader(object)
+		for _, child in ipairs(object:GetChildren()) do
+			if child.ClassName == "MaterialShader" and child.Enabled ~= false and child._shaderHandle then
+				return child._shaderHandle
+			end
+		end
+		return nil
 	end
 
 	local function destroyDynamicGroups()
@@ -261,13 +288,16 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		local size = props.Size
 		local material = props.Material
 		local isGlass = material == Enum.Material.Glass
-		drawCall.texture = materialTextures[material]
+		drawCall.texture = props._meshTexture or materialTextures[material]
 		drawCall.MaterialKind = getMaterialKind(material)
+		drawCall.shader = getPartShader(object)
 		if isGlass then
 			drawCall.roughness = math.clamp((props.Roughness or 0.5) * 0.2, 0.02, 0.18)
 			drawCall.metallic = 1.52
 			drawCall.MaterialTileScale = math.max(0.05, math.min(size.X, size.Y, size.Z) * 0.5)
-			drawCall.transmission = 0.88 + math.clamp(props.Transparency or 0, 0, 1) * 0.12
+			-- Glass opacity is controlled by the BasePart exactly like every
+			-- other material; do not impose an independent transmission floor.
+			drawCall.transmission = math.clamp(props.Transparency or 0, 0, 1)
 		else
 			drawCall.MaterialTileScale = math.max(1, math.max(size.X, size.Y, size.Z) / 4)
 			drawCall.metallic = props.Metallic
@@ -290,13 +320,15 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		local material = props.Material
 		local isGlass = material == Enum.Material.Glass
 		local size = props.Size
-		local texture = materialTextures[material]
+		local texture = props._meshTexture or materialTextures[material]
 		local mesh = getRenderableMesh(object, props, material)
+		local shader = getPartShader(object)
 		local materialParam3 = if isGlass
 			then math.max(0.05, math.min(size.X, size.Y, size.Z) * 0.5)
 			else math.max(1, math.max(size.X, size.Y, size.Z) / 4)
 		return table.concat({
 			tostring(mesh),
+			tostring(shader),
 			tostring(texture),
 			tostring(getMaterialKind(material)),
 			tostring(color.R),
@@ -359,7 +391,7 @@ Workspace.InitRenderer = function(renderer, signal, game)
 					if props then
 						state.matrix = nil
 						state.cframe = props.CFrame
-						state.scale = props.Size
+						state.scale = getRenderScale(props)
 					end
 				end
 				renderer.MeshPool.UpdateInstanceTransforms(group.batch, updates, #updates)

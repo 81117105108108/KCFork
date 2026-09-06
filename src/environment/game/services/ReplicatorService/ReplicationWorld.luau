@@ -45,6 +45,26 @@ local function validTick(tick)
 	return type(tick) == "number" and tick == tick and tick % 1 == 0 and tick >= 0 and tick < 2 ^ 32
 end
 
+local function enumName(value, fallback)
+	if type(value) == "table" and type(value.Name) == "string" then
+		return value.Name
+	end
+	if type(value) == "string" then
+		return value
+	end
+	if type(value) == "number" then
+		return ({ [0] = "Automatic", "ServerOnly", "OwnerOnly", "Manual", "Never" })[value]
+	end
+	return fallback
+end
+
+local function playerKey(player)
+	if not player then
+		return nil
+	end
+	return player.UserId ~= nil and `user:{tostring(player.UserId)}` or `player:{tostring(player)}`
+end
+
 local function setNetworkId(instance, id)
 	local props = rawget(instance, "_props")
 	if not props then
@@ -62,6 +82,7 @@ function ReplicationWorld.new(role, datamodel, renderer, options)
 	self.ownership = NetworkOwnership.new()
 	self.history = SnapshotHistory.new(self.config.snapshotHistory)
 	self.byId, self.byInstance, self.entities, self.peers = {}, {}, {}, {}
+	self.replicationGroups, self.manualRecipients = {}, setmetatable({}, { __mode = "k" })
 	self.interpolation, self.pendingSpawns = {}, {}
 	self.tick, self.revision, self.applying = 0, 0, false
 	self.localCharacterId = nil
@@ -89,17 +110,112 @@ function ReplicationWorld:GetInstance(id)
 	return self.byId[id]
 end
 
+function ReplicationWorld:AddPlayerToGroup(player, groupName)
+	assert(player ~= nil, "player is required")
+	assert(type(groupName) == "string" and #groupName > 0, "group name must be a non-empty string")
+	local key = playerKey(player)
+	local group = self.replicationGroups[groupName]
+	if not group then
+		group = {}
+		self.replicationGroups[groupName] = group
+	end
+	group[key] = true
+	return true
+end
+
+function ReplicationWorld:RemovePlayerFromGroup(player, groupName)
+	local group = type(groupName) == "string" and self.replicationGroups[groupName] or nil
+	local key = playerKey(player)
+	if not group or not key or not group[key] then
+		return false
+	end
+	group[key] = nil
+	if next(group) == nil then
+		self.replicationGroups[groupName] = nil
+	end
+	return true
+end
+
+function ReplicationWorld:IsPlayerInGroup(player, groupName)
+	local group = type(groupName) == "string" and self.replicationGroups[groupName] or nil
+	local key = playerKey(player)
+	return group ~= nil and key ~= nil and group[key] == true
+end
+
+function ReplicationWorld:SetManualRecipient(instance, player, enabled)
+	local key = playerKey(player)
+	if not instance or not key then
+		return false
+	end
+	local recipients = self.manualRecipients[instance]
+	if enabled then
+		if not recipients then
+			recipients = {}
+			self.manualRecipients[instance] = recipients
+		end
+		recipients[key] = true
+	elseif recipients then
+		recipients[key] = nil
+		if next(recipients) == nil then
+			self.manualRecipients[instance] = nil
+		end
+	end
+	return true
+end
+
+function ReplicationWorld:IsVisibleToPeer(instance, peer)
+	if not instance or instance.CanReplicate == false or not peer then
+		return false
+	end
+	local current = instance
+	while current and current ~= self.datamodel do
+		if current.CanReplicate == false then
+			return false
+		end
+		local mode = enumName(current.ReplicationMode, "Automatic")
+		if mode == "Never" or mode == "ServerOnly" then
+			return false
+		elseif mode == "Manual" then
+			local recipients = self.manualRecipients[current]
+			if not recipients or recipients[playerKey(peer.player)] ~= true then
+				return false
+			end
+		elseif mode == "OwnerOnly" then
+			local id = self.byInstance[current]
+			local ownership = id and self.ownership:Get(id) or nil
+			local ownerId = ownership and ownership.owner
+				or (current.NetworkOwner and current.NetworkOwner.UserId)
+			if not peer.player or ownerId == nil or peer.player.UserId ~= ownerId then
+				return false
+			end
+		end
+
+		local groupName = current.ReplicationGroup
+		if type(groupName) == "string"
+			and #groupName > 0
+			and not self:IsPlayerInGroup(peer.player, groupName)
+		then
+			return false
+		end
+		current = current.Parent
+	end
+	return current == self.datamodel
+end
+
 function ReplicationWorld:IsInScope(instance)
 	if not instance or instance.CanReplicate == false then
+		return false
+	end
+	if enumName(instance.ReplicationMode, "Automatic") == "Never" then
 		return false
 	end
 	local root = instance
 	while root.Parent and root.Parent ~= self.datamodel do
 		root = root.Parent
 	end
-	return root == self.datamodel.Workspace
-		or root == self.datamodel.ReplicatedStorage
-		or root == self.datamodel.Players
+	-- Replicate any top-level service under the datamodel, including Workspace.
+	-- This enables replication for Workspace, ReplicatedStorage, Players and other services.
+	return root and root.Parent == self.datamodel
 end
 
 function ReplicationWorld:Register(instance, forcedId)
@@ -228,13 +344,16 @@ function ReplicationWorld:BuildFullSnapshot(peer)
 	self.history:Push(self.tick, { versions = self:CaptureVersions() })
 	local spawns = {}
 	local stale = {}
+	peer.known = {}
 	for id, entity in pairs(self.entities) do
-		local record = self:BuildSpawn(entity.instance)
-		if record then
-			spawns[#spawns + 1] = record
-			peer.known[id] = true
-		else
-			stale[#stale + 1] = entity.instance
+		if self:IsVisibleToPeer(entity.instance, peer) then
+			local record = self:BuildSpawn(entity.instance)
+			if record then
+				spawns[#spawns + 1] = record
+				peer.known[id] = true
+			else
+				stale[#stale + 1] = entity.instance
+			end
 		end
 	end
 	for _, instance in ipairs(stale) do
@@ -252,6 +371,47 @@ function ReplicationWorld:BuildFullSnapshot(peer)
 	peer.sentOrder = { self.tick }
 	self.stats.fullSnapshotsSent += 1
 	return { serverTick = self.tick, spawns = spawns }
+end
+
+function ReplicationWorld:ReconcilePeerVisibility(peer)
+	local despawns = {}
+	for id in pairs(peer.known) do
+		local instance = self.byId[id]
+		if not instance or not self:IsVisibleToPeer(instance, peer) then
+			table.insert(despawns, { id = id, instance = instance })
+		end
+	end
+	table.sort(despawns, function(a, b)
+		return (a.instance and a.instance:GetDepth() or math.huge)
+			> (b.instance and b.instance:GetDepth() or math.huge)
+	end)
+	for _, item in ipairs(despawns) do
+		peer.known[item.id] = nil
+	end
+
+	local spawns = {}
+	local candidates = {}
+	for id, entity in pairs(self.entities) do
+		if not peer.known[id] and not entity.instance.Destroyed and self:IsVisibleToPeer(entity.instance, peer) then
+			table.insert(candidates, entity.instance)
+		end
+	end
+	table.sort(candidates, function(a, b)
+		return a:GetDepth() < b:GetDepth()
+	end)
+	for _, instance in ipairs(candidates) do
+		local id = self.byInstance[instance]
+		local parent = instance.Parent
+		local parentId = parent == self.datamodel and 0 or self.byInstance[parent]
+		if parentId == 0 or peer.known[parentId] then
+			local record = self:BuildSpawn(instance)
+			if record then
+				peer.known[id] = true
+				table.insert(spawns, record)
+			end
+		end
+	end
+	return spawns, despawns
 end
 
 local function estimateUpdate(update)
@@ -272,7 +432,7 @@ function ReplicationWorld:BuildSnapshot(peer)
 	local candidates = {}
 	local focus = peer.player and peer.player.Character and getPosition(peer.player.Character)
 	for id, entity in pairs(self.entities) do
-		if peer.known[id] and not entity.instance.Destroyed then
+		if peer.known[id] and not entity.instance.Destroyed and self:IsVisibleToPeer(entity.instance, peer) then
 			local baselineProperties = peer.ackVersions[id] or {}
 			local state = {}
 			for propertyId, revision in pairs(entity.propertyRevisions) do
@@ -301,7 +461,9 @@ function ReplicationWorld:BuildSnapshot(peer)
 	end)
 	local updates, budget = {}, self.config.bandwidthBudget
 	local deliveredVersions = {}
-	for id, properties in pairs(peer.ackVersions) do deliveredVersions[id] = table.clone(properties) end
+	for id, properties in pairs(peer.ackVersions) do
+		deliveredVersions[id] = table.clone(properties)
+	end
 	for _, update in ipairs(candidates) do
 		local size = estimateUpdate(update)
 		if size <= budget then
@@ -345,12 +507,20 @@ function ReplicationWorld:Acknowledge(peer, tick)
 end
 
 function ReplicationWorld:ApplySpawn(record)
-	if type(record) ~= "table"
-		or type(record.id) ~= "number" or record.id % 1 ~= 0 or record.id <= 0
-		or type(record.class) ~= "string" or #record.class < 1 or #record.class > 64
-		or type(record.name) ~= "string" or #record.name > 255
-		or type(record.parent) ~= "number" or record.parent % 1 ~= 0
-		or type(record.state) ~= "table" or not ReplicationSchema.IsSafeValue(record.state)
+	if
+		type(record) ~= "table"
+		or type(record.id) ~= "number"
+		or record.id % 1 ~= 0
+		or record.id <= 0
+		or type(record.class) ~= "string"
+		or #record.class < 1
+		or #record.class > 64
+		or type(record.name) ~= "string"
+		or #record.name > 255
+		or type(record.parent) ~= "number"
+		or record.parent % 1 ~= 0
+		or type(record.state) ~= "table"
+		or not ReplicationSchema.IsSafeValue(record.state)
 	then
 		return nil, "invalid spawn"
 	end
@@ -407,8 +577,11 @@ function ReplicationWorld:ApplySpawn(record)
 end
 
 function ReplicationWorld:ApplyFullSnapshot(payload)
-	if type(payload) ~= "table" or not validTick(payload.serverTick)
-		or type(payload.spawns) ~= "table" or #payload.spawns > 100000
+	if
+		type(payload) ~= "table"
+		or not validTick(payload.serverTick)
+		or type(payload.spawns) ~= "table"
+		or #payload.spawns > 100000
 	then
 		return false
 	end
@@ -432,7 +605,8 @@ function ReplicationWorld:ApplyFullSnapshot(payload)
 	end
 	if #pending ~= 0 then
 		local record = pending[1]
-		return false, `{#pending} spawn(s) pending; {record and record.class or "?"} "{record and record.name or "?"}": {lastReason or "unknown error"}`
+		return false,
+			`{#pending} spawn(s) pending; {record and record.class or "?"} "{record and record.name or "?"}": {lastReason or "unknown error"}`
 	end
 	-- References can point to deeper objects (for example a constraint under a
 	-- model referencing attachments under sibling parts). Apply state again once
@@ -465,8 +639,12 @@ function ReplicationWorld:ApplyFullSnapshot(payload)
 end
 
 function ReplicationWorld:ApplySnapshot(payload)
-	if type(payload) ~= "table" or not validTick(payload.serverTick)
-		or not validTick(payload.baselineTick) or type(payload.updates) ~= "table" or #payload.updates > 100000
+	if
+		type(payload) ~= "table"
+		or not validTick(payload.serverTick)
+		or not validTick(payload.baselineTick)
+		or type(payload.updates) ~= "table"
+		or #payload.updates > 100000
 	then
 		return false
 	end
@@ -476,8 +654,11 @@ function ReplicationWorld:ApplySnapshot(payload)
 	end
 	self.tick = payload.serverTick
 	for _, update in ipairs(payload.updates) do
-		if type(update) ~= "table" or type(update.id) ~= "number"
-			or type(update.state) ~= "table" or not ReplicationSchema.IsSafeValue(update.state)
+		if
+			type(update) ~= "table"
+			or type(update.id) ~= "number"
+			or type(update.state) ~= "table"
+			or not ReplicationSchema.IsSafeValue(update.state)
 		then
 			self.stats.malformedPackets += 1
 			continue
@@ -564,7 +745,7 @@ function ReplicationWorld:AssignOwnership(instance, playerId, player)
 	return record
 end
 
-function ReplicationWorld:ApplyOwnedPhysics(peer, payload)
+function ReplicationWorld:ApplyOwnedPhysics(peer, payload, validator)
 	local entity = type(payload) == "table" and self.entities[payload.id]
 	local playerId = peer.player and peer.player.UserId
 	if not entity or not self.ownership:IsOwner(payload.id, playerId, payload.ownershipVersion) then
@@ -586,11 +767,16 @@ function ReplicationWorld:ApplyOwnedPhysics(peer, payload)
 		or velocity:Magnitude() > self.config.maxOwnedSpeed
 		or angularVelocity:Magnitude() > self.config.maxOwnedSpeed
 	then
-		return false
+		return false, "invalid physics state"
 	end
 	local current = getPosition(entity.instance)
-	if current and (current - cframe.Position):Magnitude() > self.config.maxOwnedError then
-		return false
+	if validator then
+		local accepted, reason = validator(entity.instance, cframe, velocity, angularVelocity)
+		if not accepted then
+			return false, reason or "owned state rejected"
+		end
+	elseif current and (current - cframe.Position):Magnitude() > self.config.maxOwnedError then
+		return false, "owned state exceeded position allowance"
 	end
 	self.applying = true
 	entity.instance.CFrame = cframe

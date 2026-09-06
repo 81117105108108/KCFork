@@ -58,16 +58,17 @@ local propTable = {
 	NetworkOwnerType = Enum.MachineNetworkOwner.Server,
 }
 
-local function UpdateManifoldPointer(instance, sizeOverride)
+local function UpdateManifoldPointer(instance, sizeOverride, shapeOverride)
 	local size = sizeOverride or instance.Size
-	if instance.Shape == Enum.PartType.Block then
+	local shape = shapeOverride or instance.Shape
+	if shape == Enum.PartType.Block then
 		manifold.gen.free(instance._manifoldptr)
 		instance._manifoldptr = manifold.gen.box(size.X, size.Y, size.Z)
-	elseif instance.Shape == Enum.PartType.Ball then
+	elseif shape == Enum.PartType.Ball then
 		local radius = size.X * 0.5
 		manifold.gen.free(instance._manifoldptr)
 		instance._manifoldptr = manifold.gen.sphere(radius, 32)
-	elseif instance.Shape == Enum.PartType.Cylinder then
+	elseif shape == Enum.PartType.Cylinder then
 		local radius = size.X * 0.5
 		local height = size.Y
 		local segments = 24
@@ -189,6 +190,10 @@ return {
 		end)
 		instance:SetBarrier("Size", function(value)
 			UpdateManifoldPointer(instance, value)
+			return true
+		end)
+		instance:SetBarrier("Shape", function(value)
+			UpdateManifoldPointer(instance, nil, value)
 			return true
 		end)
 

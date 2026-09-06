@@ -53,6 +53,12 @@ KINE_ENET_API int Kine_ENet_Peer_Send(
     const void* data,
     size_t size,
     int reliable);
+KINE_ENET_API int Kine_ENet_Peer_SendEx(
+    void* peer,
+    uint8_t channel,
+    const void* data,
+    size_t size,
+    uint32_t packetFlags);
 KINE_ENET_API void Kine_ENet_Peer_Disconnect(void* peer, uint32_t data);
 KINE_ENET_API void Kine_ENet_Peer_Reset(void* peer);
 KINE_ENET_API int Kine_ENet_Peer_GetAddress(

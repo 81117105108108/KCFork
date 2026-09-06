@@ -75,6 +75,8 @@ return {
 		end
 
 		local surface, texture, decal
+		local contentDirty = true
+		local connections = {}
 		local canvasWidth, canvasHeight = 0, 0
 
 		local function desiredCanvasSize()
@@ -112,6 +114,7 @@ return {
 				return decal ~= nil
 			end
 			destroyResources()
+			contentDirty = true
 			canvasWidth, canvasHeight = width, height
 			instance.Size = UDim2.new(0, width, 0, height)
 			instance.RenderOffset = Vector2.new(0, 0)
@@ -130,6 +133,9 @@ return {
 			if not instance.Enabled or not ensureResources() then
 				return
 			end
+			if not contentDirty then
+				return
+			end
 			argon:Clear2D(surface, { R = 0, G = 0, B = 0, A = 0 })
 			for _, child in ipairs(instance:GetChildren()) do
 				if child.render then
@@ -137,6 +143,7 @@ return {
 				end
 			end
 			argon:UpdateSurface3DTexture(renderer.Window, texture, surface)
+			contentDirty = false
 		end)
 
 		local render3dId = renderer.Pool.new("3d", function()
@@ -171,9 +178,26 @@ return {
 			argon:SetDecalTiling(renderer.Window, decal, width, height, 0, 0, 0, 0)
 		end)
 
+		table.insert(connections, instance.Changed:Connect(function(property)
+			if property == "CanvasSize" or property == "PixelsPerStud" or property == "SizingMode"
+				or property == "Enabled"
+			then
+				contentDirty = true
+			end
+		end))
+		table.insert(connections, instance.DescendantAdded:Connect(function()
+			contentDirty = true
+		end))
+		table.insert(connections, instance.DescendantRemoving:Connect(function()
+			contentDirty = true
+		end))
+		table.insert(connections, instance.DescendantChanged:Connect(function()
+			contentDirty = true
+		end))
 		instance.Destroying:Connect(function()
 			renderer.Pool.Destroy(render2dId)
 			renderer.Pool.Destroy(render3dId)
+			for _, connection in ipairs(connections) do connection:Disconnect() end
 			destroyResources()
 		end)
 		instance.GetRelativeMousePosition = function()

@@ -543,6 +543,23 @@ local TERRAIN_MATERIAL_LAYERS = {
 	wood = 6,
 }
 
+local TERRAIN_MATERIAL_COLORS = {
+	grass = Color3.new(0.18, 0.72, 0.12),
+	sand = Color3.new(0.76, 0.70, 0.50),
+	dirt = Color3.new(0.52, 0.35, 0.18),
+
+	slate = Color3.new(0.35, 0.38, 0.42),
+	stone = Color3.new(0.55, 0.52, 0.48),
+
+	concrete = Color3.new(0.6, 0.6, 0.6),
+
+	snow = Color3.new(0.95, 0.95, 1),
+	smoothplastic = Color3.new(0.85, 0.85, 0.85),
+
+	wood = Color3.new(0.48, 0.30, 0.14),
+	water = Color3.new(0, 0.235, 1),
+}
+
 local function chunkKey(cx, cy, cz)
 	return cx .. "," .. cy .. "," .. cz
 end
@@ -596,10 +613,8 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 
 	if not isHeadlessRuntime and renderer and renderer.Window then
 		for index, materialName in ipairs(TERRAIN_LAYER_NAMES) do
-			terrainLayerTextures[index] = argon:CreateDecalTexture(
-				renderer.Window,
-				`./src/assets/materials/compressed/{materialName}/albedo.png`
-			)
+			terrainLayerTextures[index] =
+				argon:CreateDecalTexture(renderer.Window, `./src/assets/materials/compressed/{materialName}/albedo.png`)
 		end
 		terrainTextureSet = argon:CreateTerrainTextureSet(renderer.Window, terrainLayerTextures)
 	end
@@ -1711,7 +1726,53 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 		width = width or 20
 		height = height or 20
 		options = options or {}
-		local doMountains = options.mountains == true
+
+		posX = posX or 0
+		posY = posY or 0
+		posZ = posZ or 0
+
+		width = width or 20
+		height = height or 20
+
+		options = options or {}
+
+		local requestedTerrainType = string.lower(tostring(options.terrainType or ""))
+
+		local terrainType
+		if requestedTerrainType == "flat" or requestedTerrainType == "hills" or requestedTerrainType == "mountains" then
+			terrainType = requestedTerrainType
+		else
+			terrainType = options.mountains == true and "mountains" or "hills"
+		end
+
+		local doMountains = terrainType == "mountains"
+		local doCaves = options.caves ~= false
+
+		local seed = math.floor(tonumber(options.seed) or 49297)
+		local noiseScale = math.clamp(tonumber(options.noiseScale) or 1, 0.1, 4)
+		local roughness = math.clamp(tonumber(options.roughness) or 1, 0, 3)
+
+		local caveDensity = math.clamp(tonumber(options.caveDensity) or 1, 0, 4)
+		local caveSize = math.clamp(tonumber(options.caveSize) or 1, 0.25, 3)
+
+		local materialOverride
+
+		if type(options.material) == "string" then
+			local requestedMaterial = string.lower(options.material)
+
+			if requestedMaterial ~= "" and requestedMaterial ~= "auto" then
+				if TERRAIN_MATERIAL_LAYERS[requestedMaterial] then
+					materialOverride = requestedMaterial
+				end
+			end
+		end
+
+		local function resolveMaterial(defaultMaterial)
+			local material = materialOverride or defaultMaterial
+
+			return material, TERRAIN_MATERIAL_COLORS[material] or Color3.new(1, 1, 1)
+		end
+
 		if Terrain.UseMarchingCubes then
 			local function fade(t)
 				return t * t * t * (t * (t * 6 - 15) + 10)
@@ -1720,7 +1781,8 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 				return a + t * (b - a)
 			end
 			local function hash(x, y, z)
-				local n = math.sin(x * 127.1 + y * 311.7 + z * 74.3) * 43758.5453
+				local n = math.sin(x * 127.1 + y * 311.7 + z * 74.3 + seed * 19.19) * 43758.5453
+
 				return n - math.floor(n)
 			end
 			local function valueNoise3(x, y, z)
@@ -1756,34 +1818,51 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 			end
 
 			-- mountain heightmap: large base hills + sharp ridges on top
+			local function hillHeight(x, z)
+				local n = fbm(x, 0, z, 4, 0.035 * noiseScale, 1)
+
+				return (n - 0.5) * height * 0.8 * roughness
+			end
+
 			local function mountainHeight(x, z)
-				-- broad base shape
-				local base = fbm(x, 0, z, 5, 0.03, 1.0)
-				-- ridge noise: take absolute value of noise then invert for sharp peaks
-				local ridge1 = 1 - math.abs(fbm(x, 10, z, 4, 0.06, 1.0) * 2 - 1)
-				local ridge2 = 1 - math.abs(fbm(x, 20, z, 3, 0.12, 1.0) * 2 - 1)
-				ridge1 = ridge1 * ridge1 -- sharpen
-				ridge2 = ridge2 * ridge2
-				return base * 0.4 + ridge1 * 0.4 + ridge2 * 0.2
+				local base = fbm(x, 0, z, 5, 0.03 * noiseScale, 1)
+
+				local ridge1 = 1 - math.abs(fbm(x, 10, z, 4, 0.06 * noiseScale, 1) * 2 - 1)
+
+				local ridge2 = 1 - math.abs(fbm(x, 20, z, 3, 0.12 * noiseScale, 1) * 2 - 1)
+
+				ridge1 *= ridge1
+				ridge2 *= ridge2
+
+				return (base * 0.4 + ridge1 * 0.4 + ridge2 * 0.2) * roughness
 			end
 
 			-- fill voxels
 			local extraHeight = doMountains and height or 0
 			for x = posX - width, posX + width do
 				for z = posZ - width, posZ + width do
-					local mh = 0
-					if doMountains then
-						mh = mountainHeight(x, z) * height * 1.4
+					local heightOffset = 0
+
+					if terrainType == "hills" then
+						heightOffset = hillHeight(x, z)
+					elseif terrainType == "mountains" then
+						heightOffset = mountainHeight(x, z) * height * 1.4
 					end
 
-					local surfaceY = posY + height + mh
+					local mh = heightOffset
+					local surfaceY = posY + height + heightOffset
 
 					for y = posY, posY + height * 2 + 10 do
 						local depth = surfaceY - y
 
 						-- base terrain density
-						local sn = fbm(x, y, z, 4, 0.08, 1.0) * 4 - 2
-						local density = math.max(0, math.min(1, depth / 5.0 + sn * 0.3))
+						local sn = 0
+
+						if terrainType ~= "flat" and roughness > 0 then
+							sn = (fbm(x, y, z, 4, 0.08 * noiseScale, 1) * 4 - 2) * roughness
+						end
+
+						local density = math.max(0, math.min(1, depth / 5 + sn * 0.3))
 
 						if density <= 0 then
 							-- above surface, skip

@@ -14,6 +14,7 @@ local os = zune.platform.os
 local zune_path = _G.ZUNE_EMBEDDED
 
 local assetsaver = require("@assetsaver")
+local ExportDimension = require("@ExportDimension")
 
 export type KinemiumPlaceFile = {
 	ToExe: (string) -> (),
@@ -125,6 +126,7 @@ KineFileService.InitRenderer = function(renderer, renderer_signal, datamodel)
 			outputDirectory = options.OutputDirectory or options.outputDirectory
 		end
 		options = options or {}
+		local dimension = ExportDimension.Resolve(options, datamodel, renderer)
 
 		local assets, old_props = assetsaver:GetGameAssets(datamodel)
 		local success, result = pcall(function()
@@ -160,13 +162,12 @@ KineFileService.InitRenderer = function(renderer, renderer_signal, datamodel)
 			if role == "server" and options.Headless ~= false then
 				table.insert(flags, "headless")
 			end
-			for _, flag in ipairs(options.Flags or {}) do
-				table.insert(flags, flag)
-			end
+			ExportDimension.AddRuntimeFlags(flags, dimension, options.Flags)
 			fs.makeDir(destination .. "/exported", true)
 			fs.writeFile(destination .. "/exported/flags.toml", serde.toml.encode({ default = flags }))
 			return {
 				Role = role,
+				Dimension = dimension,
 				Directory = destination,
 				Executable = executablePath,
 			}

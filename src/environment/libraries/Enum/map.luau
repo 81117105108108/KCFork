@@ -3,7 +3,15 @@ local enumtransformer = require("@Enum")
 local enumTable = {}
 local dump = require("./dump")
 
+enumTable.Path3DMode = {
+	Linear = "Linear",
+	Bezier = "Bezier",
+	CatmullRom = "CatmullRom",
+	Hermite = "Hermite",
+}
+
 _G.log = _G.log
+local enumLog = _G.log or function() end
 
 enumTable.KinemiumDownscaleMode = {
 	Nearest = 1,
@@ -778,6 +786,7 @@ enumTable.CollisionFidelity = {
 
 enumTable.AudioBackend = {
 	RAUDIO = 0,
+	MiniAudio = 1,
 }
 
 enumTable.CameraType = {
@@ -790,6 +799,21 @@ enumTable.CameraType = {
 	Shoulder = 8,
 	TopDown = 9,
 	Isometric = 10,
+}
+
+enumTable.ReplicationMode = {
+	Automatic = 0,
+	ServerOnly = 1,
+	OwnerOnly = 2,
+	Manual = 3,
+	Never = 4,
+}
+
+enumTable.NetworkReliability = {
+	ReliableOrdered = 0,
+	ReliableUnordered = 1,
+	Unreliable = 2,
+	UnreliableSequenced = 3,
 }
 
 enumTable.SecurityCapabilities = {
@@ -823,9 +847,9 @@ for propName, values in next, dump do
 	--log("[ENUM] Created platform enum " .. propName)
 end
 if #alreadyExisting > 0 then
-	log("[ENUM] The following enums already exist and are skipped:\n" .. table.concat(alreadyExisting, "\n"))
+	enumLog("[ENUM] The following enums already exist and are skipped:\n" .. table.concat(alreadyExisting, "\n"))
 end
 
 local enum = enumtransformer.new(enumTable)
-log(string.format("[ENUM] Processed enums in %.3fms", (os.clock() - enumProcessStart) * 1000))
+enumLog(string.format("[ENUM] Processed enums in %.3fms", (os.clock() - enumProcessStart) * 1000))
 return enum

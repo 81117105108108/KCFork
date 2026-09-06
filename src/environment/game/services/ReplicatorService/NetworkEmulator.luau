@@ -13,7 +13,18 @@ function NetworkEmulator.new(options)
 	}, NetworkEmulator)
 end
 
-function NetworkEmulator:Send(value, reliable, now)
+local function isReliable(delivery)
+	if delivery == true or delivery == nil then
+		return true
+	elseif delivery == false then
+		return false
+	end
+	local name = type(delivery) == "table" and delivery.Name or tostring(delivery)
+	return name == "ReliableOrdered" or name == "ReliableUnordered"
+end
+
+function NetworkEmulator:Send(value, delivery, now)
+	local reliable = isReliable(delivery)
 	if not reliable and self.random() < self.loss then
 		return false
 	end

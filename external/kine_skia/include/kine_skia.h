@@ -215,6 +215,16 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
     float width, float height,
     uint8_t alpha);
 
+KINE_SKIA_API void Kine_Skia_Surface_DrawPixels(
+    KineSkiaSurface* surface,
+    const void* pixels,
+    int sourceWidth, int sourceHeight,
+    uint32_t sourceRowBytes,
+    float x, float y,
+    float width, float height,
+    bool flipY,
+    uint8_t alpha);
+
 KINE_SKIA_API void Kine_Skia_Surface_DrawImageOutlineSized(
     KineSkiaSurface* surface,
     KineSkiaImage* image,

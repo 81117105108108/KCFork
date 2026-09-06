@@ -1,0 +1,31 @@
+local button = require("./button")
+
+return {
+	name = "Model",
+	type = "category",
+	buttons = {
+		button("Select", "Cursor", "Select objects in the viewport", "tool", { "Select" }),
+		button("Move", "Move", "Move the selected part", "tool", { "Move" }),
+		button("Scale", "Size", "Resize the selected part", "tool", { "Size" }),
+		button("Rotate", "Rotate", "Rotate the selected part", "tool", { "Rotate" }),
+		button("Transform", "Handles", "Activate the transform handles", "tool", { "Move" }),
+		button("Geometric", "MeshPart", "Insert a geometric part", "insert", { "Part", "Part" }),
+		button("Pivot", "Attachment", "Move a model pivot to its primary part", "pivot"),
+		button("Reset", "Snap", "Reset the selected rotation", "reset"),
+		button("Part", "Part", "Insert a part into Workspace", "insert", { "Part", "Part" }),
+		button("Effect", "ParticleEmitter", "Add a particle effect to the selected part", "insert", { "ParticleEmitter", "ParticleEmitter" }),
+		button("Attachment", "Attachment", "Add an attachment to the selection", "insert", { "Attachment", "Attachment" }),
+		button("Constraint", "BallSocketConstraint", "Constrain the first two selected parts", "constraint"),
+		button("Weld", "WeldConstraint", "Weld the first two selected parts", "weld"),
+		button("Material", "Texture", "Cycle the material of selected parts", "material"),
+		button("Color", "ColorPicker", "Cycle the color of selected parts", "color"),
+		button("Group", "Model", "Group or ungroup the selection", "group"),
+		button("Lock", "SelectionBox", "Lock or unlock selected parts", "lock"),
+		button("Anchor", "Attachment", "Anchor or unanchor selected parts", "anchor"),
+		button("Align", "AlignPosition", "Align selected parts to the first selection", "align"),
+		button("Union", "UnionOperation", "Union the selected parts", "union"),
+		button("Intersect", "IntersectOperation", "Intersect the selected parts", "intersect"),
+		button("Separate", "MultipleDevices", "Separate the selected solid operation", "separate"),
+		button("Negate", "NegateOperation", "Subtract the remaining parts from the first", "negate"),
+	},
+}

@@ -7,10 +7,13 @@ local argon = require("@Argon")
 local propTable = {
 	MeshObject = nil,
 	MeshId = "",
+	TextureID = "",
+	TextureId = "",
 	_showhitbox = false,
 	CollisionFidelity = Enum.CollisionFidelity.Default,
 	RenderFidelity = Enum.RenderFidelity.Automatic,
 	CollisionScale = 1,
+	_meshUsesPartSize = true,
 	Anchored = true,
 	Name = "MeshPart",
 	BaseClass = "BasePart",
@@ -44,6 +47,8 @@ return {
 
 		local ownedMeshObject = nil
 		local loadingMeshId = false
+		local ownedTexture = nil
+		local loadingTexture = false
 
 		local function syncMeshObject(meshObject)
 			instance._mesh = meshObject and (meshObject._mesh or meshObject._meshgenHandle) or nil
@@ -61,6 +66,36 @@ return {
 				rawget(instance, "_props").MeshObject = nil
 			end
 			previous:Destroy()
+		end
+
+		local function releaseOwnedTexture()
+			if ownedTexture and renderer and renderer.Window then
+				argon:Destroy3DTexture(renderer.Window, ownedTexture)
+			end
+			ownedTexture = nil
+			rawget(instance, "_props")._meshTexture = nil
+		end
+
+		local function loadTexture(textureId)
+			if loadingTexture then
+				return
+			end
+			loadingTexture = true
+			releaseOwnedTexture()
+
+			local path = type(textureId) == "string" and textureId or ""
+			if path ~= "" and not _G.IsHeadless and renderer and renderer.Window then
+				local ok, texture = pcall(argon.CreateMeshTexture, argon, renderer.Window, path)
+				if ok and texture then
+					ownedTexture = texture
+					rawget(instance, "_props")._meshTexture = texture
+				else
+					warn(`MeshPart could not load texture "{path}"`)
+				end
+			end
+
+			loadingTexture = false
+			renderer.EventBus:Fire("UpdatePart", instance)
 		end
 
 		local function loadMeshId(meshId)
@@ -127,6 +162,11 @@ return {
 		else
 			syncMeshObject(instance.MeshObject)
 		end
+		if instance.TextureID ~= "" then
+			loadTexture(instance.TextureID)
+		elseif instance.TextureId ~= "" then
+			loadTexture(instance.TextureId)
+		end
 
 		instance.Changed:Connect(function(property, value)
 			if syncingTransform then
@@ -148,7 +188,20 @@ return {
 				renderer.EventBus:Fire("UpdatePart", instance)
 			elseif property == "MeshId" then
 				loadMeshId(value)
-			elseif property == "_mesh" or property == "_cpuMeshData" or property == "Material" then
+			elseif property == "TextureID" or property == "TextureId" then
+				local props = rawget(instance, "_props")
+				if property == "TextureID" then
+					props.TextureId = value
+				else
+					props.TextureID = value
+				end
+				loadTexture(value)
+			elseif
+				property == "_mesh"
+				or property == "_cpuMeshData"
+				or property == "_meshUsesPartSize"
+				or property == "Material"
+			then
 				renderer.EventBus:Fire("UpdatePart", instance)
 			elseif property == "Parent" then
 				renderer.EventBus:Fire("UpdatePart", instance)
@@ -156,6 +209,7 @@ return {
 		end)
 
 		instance.Destroying:Connect(function()
+			releaseOwnedTexture()
 			releaseOwnedMeshObject()
 		end)
 

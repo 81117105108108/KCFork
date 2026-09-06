@@ -28,6 +28,32 @@ export type Matrix = typeof(Matrix:new({}))
 
 local CF_EPSILON = 1e-6
 
+local function toVector3(value, fallback)
+	local valueType = type(value)
+	if (valueType == "table" or valueType == "vector")
+		and type(value.X) == "number"
+		and type(value.Y) == "number"
+		and type(value.Z) == "number"
+	then
+		-- Always expose the multiplayer-compatible Vector3 datatype from CFrame,
+		-- even when a native Luau vector or decoded plain table enters the API.
+		return Vector3.new(value.X, value.Y, value.Z)
+	end
+	return fallback or Vector3.zero
+end
+
+local function isVectorLike(value)
+	local valueType = type(value)
+	if valueType == "vector" then
+		return true
+	end
+	return valueType == "table"
+		and type(value.X) == "number"
+		and type(value.Y) == "number"
+		and type(value.Z) == "number"
+		and value.Position == nil
+end
+
 local function isFinite(n)
 	return n == n and n ~= math.huge and n ~= -math.huge
 end
@@ -54,15 +80,17 @@ local function safeUnit(vec, fallback)
 end
 
 local function buildLookRotation(pos, target, up)
-	up = up or Vector3.new(0, 1, 0)
+	pos = toVector3(pos)
+	target = toVector3(target)
+	up = toVector3(up, Vector3.new(0, 1, 0))
 
 	local z = safeUnit(pos - target, Vector3.new(0, 0, 1))
-	if math.abs(up:Dot(z)) > 0.999 then
+	if math.abs(Vector3.Dot(up, z)) > 0.999 then
 		up = Vector3.new(0, 0, 1)
 	end
 
-	local x = safeUnit(up:Cross(z), Vector3.new(1, 0, 0))
-	local y = safeUnit(z:Cross(x), Vector3.new(0, 1, 0))
+	local x = safeUnit(Vector3.Cross(up, z), Vector3.new(1, 0, 0))
+	local y = safeUnit(Vector3.Cross(z, x), Vector3.new(0, 1, 0))
 
 	return {
 		{ x.X, y.X, z.X },
@@ -73,7 +101,9 @@ end
 
 function CFrame.new(...)
 	local args = { ... }
-	local self = setmetatable({}, CFrame)
+	local self = setmetatable({
+		__type = "CFrame",
+	}, CFrame)
 
 	self.Rotation = {
 		{ 1, 0, 0 },
@@ -82,11 +112,11 @@ function CFrame.new(...)
 	}
 
 	if #args == 1 then
-		self.Position = args[1]
+		self.Position = toVector3(args[1])
 	elseif #args == 3 then
 		self.Position = Vector3.new(args[1], args[2], args[3])
 	elseif #args == 2 then
-		local pos, target = args[1], args[2]
+		local pos, target = toVector3(args[1]), toVector3(args[2])
 		self.Position = pos
 		self.Rotation = buildLookRotation(pos, target)
 	elseif #args == 12 then
@@ -148,7 +178,7 @@ function CFrame:ToQuaternion()
 end
 
 function CFrame.__mul(a, b)
-	if typeof(b) == "table" and b.X and b.Y and b.Z and not b.Position then
+	if isVectorLike(b) then
 		local p = a.Position
 		local r = a.Rotation
 		return Vector3.new(
@@ -303,9 +333,9 @@ function CFrame:Orthonormalize()
 	local x = self:GetRightVector()
 	local y = self:GetUpVector()
 
-	x = x:Unit()
-	y = (y - x * x:Dot(y)):Unit()
-	local z = x:Cross(y)
+	x = Vector3.Unit(x)
+	y = Vector3.Unit(y - x * Vector3.Dot(x, y))
+	local z = Vector3.Cross(x, y)
 
 	self.Rotation = {
 		{ x.X, y.X, z.X },
@@ -393,10 +423,10 @@ end
 
 function CFrame:FacingDirection(dir, up)
 	up = up or Vector3.new(0, 1, 0)
-	dir = dir:Unit()
+	dir = Vector3.Unit(dir)
 
-	local x = up:Cross(dir):Unit()
-	local y = dir:Cross(x)
+	local x = Vector3.Unit(Vector3.Cross(up, dir))
+	local y = Vector3.Cross(dir, x)
 
 	local cf = CFrame.new(self.Position)
 	cf.Rotation = {
@@ -416,19 +446,19 @@ function CFrame:RotateAroundPoint(point, axis, angle)
 end
 
 function CFrame.ProjectPointOntoPlane(point, normal)
-	normal = normal:Unit()
-	return point - normal * (point:Dot(normal))
+	normal = Vector3.Unit(normal)
+	return point - normal * Vector3.Dot(point, normal)
 end
 
 function CFrame:Mirror(normal)
-	normal = normal:Unit()
+	normal = Vector3.Unit(normal)
 	local p = self.Position
-	local reflectedPos = p - normal * (2 * p:Dot(normal))
+	local reflectedPos = p - normal * (2 * Vector3.Dot(p, normal))
 
 	local r = self.Rotation
 	for i = 1, 3 do
 		local v = Vector3.new(r[1][i], r[2][i], r[3][i])
-		v = v - normal * (2 * v:Dot(normal))
+		v = v - normal * (2 * Vector3.Dot(v, normal))
 		r[1][i], r[2][i], r[3][i] = v.X, v.Y, v.Z
 	end
 
@@ -658,8 +688,8 @@ end
 
 function CFrame:AlignUp(normal)
 	local look = self:GetLookVector()
-	local right = normal:Cross(look):Unit()
-	local up = look:Cross(right)
+	local right = Vector3.Unit(Vector3.Cross(normal, look))
+	local up = Vector3.Cross(look, right)
 
 	local cf = CFrame.new(self.Position)
 	cf.Rotation = {
@@ -787,7 +817,12 @@ end
 
 function CFrame.FromTable(tbl)
 	assert(tbl.type == "CFrame" or tbl.__type == "CFrame")
-	local cf = CFrame.new(Vector3.FromTable(tbl.Position))
+	local position = tbl.Position
+	local cf = CFrame.new(
+		type(position) == "table" and (position.type == "Vector3" or position.__type == "Vector3")
+			and Vector3.FromTable(position)
+			or toVector3(position)
+	)
 	cf.Rotation = tbl.Rotation
 	return cf
 end
@@ -984,7 +1019,7 @@ function CFrame.__unm(a)
 end
 
 function CFrame:Dot(other)
-	return self.Position:Dot(other.Position)
+	return Vector3.Dot(self.Position, other.Position)
 end
 
 function CFrame:Determinant()

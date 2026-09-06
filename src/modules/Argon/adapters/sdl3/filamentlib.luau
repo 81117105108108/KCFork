@@ -29,7 +29,7 @@ local indexBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
 local transformBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
 local drawListVersions: { [any]: { [number]: number } } = setmetatable({}, { __mode = "k" })
 
-assert(DRAW_ITEM_SIZE == 120, "KineFilamentDrawItem ABI mismatch")
+assert(DRAW_ITEM_SIZE == 128, "KineFilamentDrawItem ABI mismatch")
 
 local drawItemOffsets = {
 	mesh = DrawItem:offset("mesh"),
@@ -45,6 +45,7 @@ local drawItemOffsets = {
 	materialKind = DrawItem:offset("materialKind"),
 	flags = DrawItem:offset("flags"),
 	reserved = DrawItem:offset("reserved"),
+	shader = DrawItem:offset("shader"),
 }
 
 local function getDrawListBuffer(window: typedefs.Window, itemCount: number)
@@ -172,6 +173,7 @@ local function writeDrawItem(items, packedCount: number, drawCall)
 	items:writei32(base + drawItemOffsets.materialKind, drawCall.MaterialKind or 0)
 	items:writeu32(base + drawItemOffsets.flags, flags)
 	items:writeu32(base + drawItemOffsets.reserved, 0)
+	items:writeptr(base + drawItemOffsets.shader, drawCall.shader or zune.ffi.null)
 	return true
 end
 
@@ -179,6 +181,8 @@ function filamentAdapter:Init(window: typedefs.Window)
 	filamentPixelsPtr = zune.ffi.alloc(window.Width * window.Height * 4)
 
 	if window.WGI == "vulkan" then
+		-- Filament owns the compositor only on the 3D path. A 2D-only renderer
+		-- creates the standalone compositor directly and never calls Init3D.
 		window._3dhandle =
 			filament.lib.Kine_Filament_CreateForVulkanCompositorWindow(window._handle, window.Width, window.Height)
 	else
@@ -189,6 +193,108 @@ function filamentAdapter:Init(window: typedefs.Window)
 		return
 	end
 	filament.lib.Kine_Filament_CreateSky(window._3dhandle, 102 / 255, 191 / 255, 255 / 255, 1)
+end
+
+function filamentAdapter:CreateViewport(width: number, height: number)
+	width = math.max(1, math.floor(width))
+	height = math.max(1, math.floor(height))
+	local handle = filament.lib.Kine_Filament_Create(width, height)
+	if not handle or handle == zune.ffi.null then
+		return nil, "Could not create the offscreen Filament context"
+	end
+
+	local viewportWindow = {
+		_3dhandle = handle,
+		Width = width,
+		Height = height,
+		WGI = "offscreen",
+	}
+	filament.lib.Kine_Filament_CreateSky(handle, 30 / 255, 34 / 255, 43 / 255, 1)
+	return {
+		Window = viewportWindow,
+		Width = width,
+		Height = height,
+		Pixels = zune.ffi.alloc(width * height * 4),
+	}
+end
+
+function filamentAdapter:ResizeViewport(viewport, width: number, height: number)
+	if not viewport or not viewport.Window or not viewport.Window._3dhandle then
+		return false
+	end
+	width = math.max(1, math.floor(width))
+	height = math.max(1, math.floor(height))
+	if viewport.Width == width and viewport.Height == height then
+		return true
+	end
+	filament.lib.Kine_Filament_Resize(viewport.Window._3dhandle, width, height)
+	if viewport.Pixels then
+		zune.ffi.free(viewport.Pixels)
+	end
+	viewport.Pixels = zune.ffi.alloc(width * height * 4)
+	viewport.Width = width
+	viewport.Height = height
+	viewport.Window.Width = width
+	viewport.Window.Height = height
+	return true
+end
+
+function filamentAdapter:SetViewportCamera(viewport, position, target, fieldOfView: number?)
+	local window = viewport and viewport.Window
+	local handle = window and window._3dhandle
+	if not handle or handle == zune.ffi.null then
+		return false
+	end
+	local aspect = viewport.Width / math.max(1, viewport.Height)
+	filament.lib.Kine_Filament_SetCameraPerspective(handle, fieldOfView or 60, aspect, 0.1, 500)
+	filament.lib.Kine_Filament_SetCameraLookAt(
+		handle,
+		position.X,
+		position.Y,
+		position.Z,
+		target.X,
+		target.Y,
+		target.Z,
+		0,
+		1,
+		0
+	)
+	return true
+end
+
+function filamentAdapter:RenderViewport(viewport, dt: number)
+	local window = viewport and viewport.Window
+	local handle = window and window._3dhandle
+	if not handle or handle == zune.ffi.null or not viewport.Pixels then
+		return nil
+	end
+	filament.lib.Kine_Filament_RenderFrame(handle, dt)
+	filament.lib.Kine_Filament_ReadPixels(handle, viewport.Pixels)
+	return viewport.Pixels, viewport.Width * 4
+end
+
+function filamentAdapter:DestroyViewport(viewport)
+	if not viewport then
+		return
+	end
+	if viewport.Pixels then
+		zune.ffi.free(viewport.Pixels)
+		viewport.Pixels = nil
+	end
+	local window = viewport.Window
+	if window then
+		local drawListBuffer = drawListBuffers[window]
+		if drawListBuffer then
+			zune.ffi.free(drawListBuffer.pointer)
+			drawListBuffers[window] = nil
+		end
+		drawListVersions[window] = nil
+		if window._3dhandle and window._3dhandle ~= zune.ffi.null then
+			filament.lib.Kine_Filament_Destroy(window._3dhandle)
+		end
+		window._3dhandle = nil
+	end
+	viewport.Window = nil
 end
 
 function filamentAdapter:CreateMaterialShader(window: typedefs.Window, source: string)
@@ -226,6 +332,17 @@ function filamentAdapter:SetGlobalMaterialShader(window: typedefs.Window, shader
 		return false
 	end
 	return filament.lib.Kine_Filament_SetGlobalShader(window._3dhandle, shader or zune.ffi.null) ~= 0
+end
+
+function filamentAdapter:SetPostProcessShader(window: typedefs.Window, shader)
+	if not window or not window._3dhandle or window._3dhandle == zune.ffi.null then
+		return false, "Filament is not initialized for this window"
+	end
+	local applied = filament.lib.Kine_Filament_SetPostProcessShader(window._3dhandle, shader or zune.ffi.null) ~= 0
+	if not applied then
+		return false, readCString(filament.lib.Kine_Filament_Shader_GetLastError())
+	end
+	return true
 end
 
 function filamentAdapter:GetVulkanCompositor(window: typedefs.Window)
@@ -285,6 +402,101 @@ function filamentAdapter:SetCameraLookAt(window: typedefs.Window, position: type
 	)
 end
 
+function filamentAdapter:SetCameraPerspective(
+	window: typedefs.Window,
+	fieldOfView: number,
+	aspect: number,
+	nearPlane: number?,
+	farPlane: number?
+)
+	local handle = window._3dhandle
+	if not handle or handle == zune.ffi.null then
+		return
+	end
+	filament.lib.Kine_Filament_SetCameraPerspective(
+		handle,
+		fieldOfView,
+		aspect,
+		nearPlane or 1,
+		farPlane or 500
+	)
+end
+
+local filamentLightTypes = {
+	Point = 0,
+	Spot = 1,
+	Surface = 2,
+}
+
+function filamentAdapter:CreateLight(window: typedefs.Window, lightType: string, options): typedefs.Light?
+	if not window or not window._3dhandle then
+		return nil
+	end
+	options = options or {}
+	local position = options.Position or { X = 0, Y = 0, Z = 0 }
+	local direction = options.Direction or { X = 0, Y = -1, Z = 0 }
+	local color = options.Color or { R = 1, G = 1, B = 1 }
+	local outer = math.rad(math.clamp(options.Angle or 90, 1, 180) * 0.5)
+	local inner = outer * math.clamp(options.InnerConeRatio or 0.8, 0.05, 1)
+	local handle = filament.lib.Kine_Filament_CreateLightEx(
+		window._3dhandle,
+		filamentLightTypes[lightType] or filamentLightTypes.Point,
+		position.X, position.Y, position.Z,
+		direction.X, direction.Y, direction.Z,
+		color.R, color.G, color.B,
+		math.max(0, options.Brightness or 1) * 100000,
+		math.max(0.001, options.Range or 12),
+		inner, outer,
+		if options.CastShadow == true then 1 else 0,
+		if options.Enabled ~= false then 1 else 0
+	)
+	if handle < 0 then
+		return nil
+	end
+	return { _handle = handle }
+end
+
+function filamentAdapter:UpdateLight(window: typedefs.Window, light: typedefs.Light, options)
+	if not window or not light then
+		return
+	end
+	local ctx, handle = window._3dhandle, light._handle
+	if options.Position then
+		local value = options.Position
+		filament.lib.Kine_Filament_SetPositionLight(ctx, handle, value.X, value.Y, value.Z)
+	end
+	if options.Direction then
+		local value = options.Direction
+		filament.lib.Kine_Filament_SetDirectionLight(ctx, handle, value.X, value.Y, value.Z)
+	end
+	if options.Color then
+		local value = options.Color
+		filament.lib.Kine_Filament_SetColorLight(ctx, handle, value.R, value.G, value.B)
+	end
+	if options.Brightness ~= nil then
+		filament.lib.Kine_Filament_SetIntensityLight(ctx, handle, math.max(0, options.Brightness) * 100000)
+	end
+	if options.Range ~= nil then
+		filament.lib.Kine_Filament_SetFalloffLight(ctx, handle, math.max(0.001, options.Range))
+	end
+	if options.Angle ~= nil then
+		local outer = math.rad(math.clamp(options.Angle, 1, 180) * 0.5)
+		filament.lib.Kine_Filament_SetConeLight(ctx, handle, outer * 0.8, outer)
+	end
+	if options.CastShadow ~= nil then
+		filament.lib.Kine_Filament_SetShadowLight(ctx, handle, if options.CastShadow == true then 1 else 0)
+	end
+	if options.Enabled ~= nil then
+		filament.lib.Kine_Filament_SetEnabledLight(ctx, handle, if options.Enabled == true then 1 else 0)
+	end
+end
+
+function filamentAdapter:RemoveLight(window: typedefs.Window, light: typedefs.Light?)
+	if window and light then
+		filament.lib.Kine_Filament_RemoveLight(window._3dhandle, light._handle)
+	end
+end
+
 function filamentAdapter:CreateDecal(
 	window: typedefs.Window,
 	width,
@@ -307,7 +519,7 @@ function filamentAdapter:CreateDecal(
 		studsPerTileV,
 		false,
 		false,
-		false
+		true
 	)
 	return { _handle = decal }
 end
@@ -355,7 +567,7 @@ function filamentAdapter:Resize3D(window: typedefs.Window, width, height)
 	filament.lib.Kine_Filament_Resize(handle, width, height)
 	if window.WGI == "vulkan" then
 		local compositor = self:GetVulkanCompositor(window)
-		if compositor then
+		if compositor and not window._vulkanCompositor then
 			window._vulkanCompositor = compositor
 			window._vulkanCompositorOwnedByFilament = true
 		end
@@ -380,6 +592,9 @@ function filamentAdapter:Render3D(window: typedefs.Window, dt: number)
 end
 
 function filamentAdapter:ResizePixelBuffer(window, width, height)
+	if not window._3dhandle or window._3dhandle == zune.ffi.null then
+		return
+	end
 	if filamentPixelsPtr then
 		zune.ffi.free(filamentPixelsPtr)
 	end
@@ -483,12 +698,13 @@ end
 
 function filamentAdapter:CreateMesh(
 	window: typedefs.Window,
-	meshType: "cube" | "displacedCube" | "sphere" | "pyramid" | "quad" | "moveGizmo" | "rotateGizmo" | "scaleGizmo"
+	meshType: "cube" | "displacedCube" | "sphere" | "cylinder" | "pyramid" | "quad" | "moveGizmo" | "rotateGizmo" | "scaleGizmo"
 ): typedefs.Mesh
 	local map = {
 		["cube"] = 1,
 		["displacedCube"] = 5,
 		["sphere"] = 2,
+		["cylinder"] = 6,
 		["pyramid"] = 3,
 		["quad"] = 4,
 		["moveGizmo"] = 10,
@@ -757,6 +973,7 @@ function filamentAdapter:DrawMeshList(
 		items:writei32(base + drawItemOffsets.materialKind, drawCall.MaterialKind or 0)
 		items:writeu32(base + drawItemOffsets.flags, flags)
 		items:writeu32(base + drawItemOffsets.reserved, 0)
+		items:writeptr(base + drawItemOffsets.shader, drawCall.shader or zune.ffi.null)
 		packedCount += 1
 	end
 

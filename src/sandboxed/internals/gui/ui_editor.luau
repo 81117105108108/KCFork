@@ -124,16 +124,18 @@ renderer.Pool.new("2da", function()
 	end
 	local mouse = Argon:GetMousePosition()
 
-	if activeDrag and activeDrag.object ~= selection then
+	if renderer.Dimension == "2D" then
+		activeDrag = nil
+	elseif activeDrag and activeDrag.object ~= selection then
 		activeDrag = nil
 	end
-	if activeDrag then
+	if renderer.Dimension ~= "2D" and activeDrag then
 		if Argon:IsMouseButtonDown(Argon.MouseButton.Left) then
 			applyDrag(mouse)
 		else
 			activeDrag = nil
 		end
-	elseif Argon:IsMouseButtonPressed(Argon.MouseButton.Left) then
+	elseif renderer.Dimension ~= "2D" and Argon:IsMouseButtonPressed(Argon.MouseButton.Left) then
 		local hitHandle
 		for _, handle in ipairs(handles) do
 			local cx, cy = drawPos.X + size.X * handle.x, drawPos.Y + size.Y * handle.y

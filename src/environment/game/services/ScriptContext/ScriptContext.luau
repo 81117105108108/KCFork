@@ -89,7 +89,8 @@ ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 		env.require = customRequire
 
 		local taskSubCount = 0
-		local scriptName = scriptObject and (scriptObject.Name .. " (" .. tostring(scriptObject:GetFullName()) .. ")") or "SandboxedScript"
+		local scriptName = scriptObject and (scriptObject.Name .. " (" .. tostring(scriptObject:GetFullName()) .. ")")
+			or "SandboxedScript"
 
 		env.task = {
 			cancel = zune.task.cancel,
@@ -417,11 +418,8 @@ ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 							moduleEnv.src = target
 							moduleEnv.loader = scriptObject
 
-							id, success, result, thread, getResult = kilang:execute(
-								source,
-								{ StackId = getModuleStackId(target) },
-								moduleEnv
-							)
+							id, success, result, thread, getResult =
+								kilang:execute(source, { StackId = getModuleStackId(target) }, moduleEnv)
 						end
 
 						if getResult then
@@ -610,10 +608,7 @@ ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 
 			RunClientScripts = function()
 				local StarterPlayer, Players, CoreGui, InternalStorage =
-					getserv("StarterPlayer"),
-					getserv("Players"),
-					getserv("CoreGui"),
-					getserv("InternalStorage")
+					getserv("StarterPlayer"), getserv("Players"), getserv("CoreGui"), getserv("InternalStorage")
 
 				runScriptOfClass(StarterPlayer, "LocalScript")
 				runScriptOfClass(Players, "LocalScript")

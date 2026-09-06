@@ -52,9 +52,6 @@ return {
 		local stateConnection = nil
 
 		local function newObject(className)
-			-- Class modules are loaded by InstanceRegistry itself. Requiring the
-			-- registry at module scope creates a circular require and stalls class
-			-- discovery before CharacterController has finished loading.
 			local Registry = require("@InstanceRegistry")
 			local ok, object = pcall(Registry.new, className, renderer, datamodel)
 			return ok and object or nil
@@ -238,8 +235,6 @@ return {
 			local jump = components.JumpController
 			local gravity = components.GravityController
 
-			-- Workspace stores gravity as a signed Y acceleration (currently -9.81),
-			-- while GravityController exposes a consistently downward vector.
 			local configuredGravity = datamodel and datamodel.Workspace and datamodel.Workspace.Gravity or -196.2
 			local gravityAcceleration = gravity:GetAcceleration(configuredGravity)
 			local vertical, didJump = jump:Resolve(

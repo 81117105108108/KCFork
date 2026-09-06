@@ -2,6 +2,7 @@ local ffi = zune.ffi
 local enet = require("@enet_ffi")
 local state = require("@GNS/state")
 local Serializer = require("@GNS/Serializer")
+local Delivery = require("./Delivery")
 local task = zune.task
 
 local Server = {}
@@ -52,7 +53,7 @@ local function getPeerAddress(peer)
 	return resultAddress, resultPort
 end
 
-local function sendSerialized(peer, data, reliable)
+local function sendSerialized(peer, data, delivery)
 	local ok, serialized = pcall(Serializer.Serialize, data)
 	if not ok then
 		warn("[ENet][Server] Failed to serialize:", serialized)
@@ -62,7 +63,8 @@ local function sendSerialized(peer, data, reliable)
 	local size = buffer.len(serialized)
 	local payload = ffi.alloc(size)
 	payload:write(0, serialized, 0, size)
-	local sent = enet.lib.Kine_ENet_Peer_Send(peer, reliable and 0 or 1, payload, size, reliable and 1 or 0)
+	local channel, flags = Delivery.Resolve(delivery)
+	local sent = enet.lib.Kine_ENet_Peer_SendEx(peer, channel, payload, size, flags)
 	ffi.free(payload)
 	return sent ~= 0, size
 end
@@ -93,7 +95,7 @@ function Server:Init(address, port, allowedTokens)
 		bindAddress,
 		self.Port,
 		4095,
-		2,
+		Delivery.ChannelCount,
 		0,
 		0
 	)
@@ -203,11 +205,11 @@ function Server:HandlePacket(peer, msg)
 	end
 end
 
-function Server:Send(client, data, reliable)
+function Server:Send(client, data, delivery)
 	if not client or not client.hConn then
 		return false
 	end
-	local sent, size = sendSerialized(client.hConn, data, reliable == true)
+	local sent, size = sendSerialized(client.hConn, data, delivery)
 	if sent then
 		self.Stats.bytesSent += size or 0
 		self.Stats.packetsSent += 1
@@ -215,19 +217,19 @@ function Server:Send(client, data, reliable)
 	return sent
 end
 
-function Server:SendAll(data, reliable)
+function Server:SendAll(data, delivery)
 	for _, client in pairs(self.ConnectedClients) do
 		if client.authenticated then
-			self:Send(client, data, reliable)
+			self:Send(client, data, delivery)
 		end
 	end
 	return true
 end
 
-function Server:SendFiltered(data, reliable, filterFn)
+function Server:SendFiltered(data, delivery, filterFn)
 	for _, client in pairs(self.ConnectedClients) do
 		if client.authenticated and (filterFn == nil or filterFn(client)) then
-			self:Send(client, data, reliable)
+			self:Send(client, data, delivery)
 		end
 	end
 	return true

@@ -24,7 +24,7 @@ KinemiumShaderService.InitRenderer = function(renderer, renderer_signal, datamod
 				if not compiled then
 					return false, compileError
 				end
-				if ShaderObject._type == "surface" or ShaderObject._type == "sky" then
+				if ShaderObject._type == "surface" or ShaderObject._type == "postprocess" or ShaderObject._type == "sky" then
 					return ShaderObject:ApplyGlobal(renderer.Window)
 				end
 				return true

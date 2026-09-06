@@ -21,6 +21,108 @@ export type TableCell = string | number | {
 	Align: ("left" | "center" | "right")?,
 }
 
+export type PanZoomCanvasContext = {
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+
+	cameraX: number,
+	cameraY: number,
+	zoom: number,
+
+	dragging: boolean,
+	hovered: boolean,
+
+	worldMinX: number,
+	worldMinY: number,
+	worldMaxX: number,
+	worldMaxY: number,
+
+	gridStep: number,
+
+	worldToScreen: (x: number, y: number) -> { X: number, Y: number },
+	screenToWorld: (x: number, y: number) -> { X: number, Y: number },
+
+	state: any,
+
+	window: any,
+	renderer: any,
+	theme: any,
+	RetainedStorage: { [any]: any },
+}
+
+export type PanZoomCanvasParams = {
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+
+	id: any,
+	renderer: any,
+	engine_window: any?,
+	window: any?,
+	theme: any,
+	RetainedStorage: { [any]: any },
+
+	InitialCameraX: number?,
+	InitialCameraY: number?,
+	InitialZoom: number?,
+
+	MinZoom: number?,
+	MaxZoom: number?,
+	ZoomStep: number?,
+	ResetZoom: number?,
+
+	PanButton: number?,
+	EnableSpacePan: boolean?,
+	EnableLeftDragPan: boolean?,
+
+	WheelAction: ("zoom" | "pan")?,
+	WheelPanSpeed: number?,
+
+	ShowGrid: boolean?,
+	ShowAxes: boolean?,
+	ShowRulers: boolean?,
+	ShowZoomControls: boolean?,
+
+	GridSize: number?,
+	MinGridPixels: number?,
+	MaxGridPixels: number?,
+	MajorGridEvery: number?,
+	MaxGridLines: number?,
+
+	RulerSize: number?,
+	RulerTextSize: number?,
+
+	AxisThickness: number?,
+	CornerRadius: number?,
+
+	ZoomControlHeight: number?,
+	ZoomLabelWidth: number?,
+	ZoomControlOffsetX: number?,
+	ZoomControlOffsetY: number?,
+	ZoomControlTextSize: number?,
+
+	Font: string?,
+
+	BackgroundColor: RGBA?,
+	TextColor: RGBA?,
+	GridColor: RGBA?,
+	MajorGridColor: RGBA?,
+	RulerColor: RGBA?,
+	RulerBorderColor: RGBA?,
+	AxisXColor: RGBA?,
+	AxisYColor: RGBA?,
+
+	ZoomControlColor: RGBA?,
+	ZoomControlHoverColor: RGBA?,
+	ZoomControlBorderColor: RGBA?,
+
+	callback: ((context: PanZoomCanvasContext, dt: number) -> ())?,
+	OnViewChanged: ((cameraX: number, cameraY: number, zoom: number) -> ())?,
+}
+
 export type TableParams = {
 	x: number,
 	y: number,
@@ -284,6 +386,10 @@ export type WidgetParams = {
 	tabs: { { title: string } }?,
 	activeTab: number?,
 	OnTabChanged: ((index: number, tab: { title: string }) -> ())?,
+	Draggable: boolean?,
+	RetainedStorage: { [any]: any }?,
+	id: any?,
+	OnMoved: ((x: number, y: number) -> ())?,
 	callback: () -> ()?,
 }
 

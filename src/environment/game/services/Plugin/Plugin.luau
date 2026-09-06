@@ -1771,7 +1771,7 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 					width = 60,
 					height = 60,
 					texture = resolveToolbarIcon(icon)
-						or KinemiumIconLoader.ToTexture("./src/assets/images/icons/Move.png"),
+						or KinemiumIconLoader.ToTexture("./src/assets/images/icons/Move.svg"),
 					callback = function(element, rect)
 						if button.Enabled then
 							button.Click:Fire(element, rect)

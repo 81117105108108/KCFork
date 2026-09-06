@@ -1,0 +1,11 @@
+Model Information:
+* title:	Capsule shape
+* source:	https://sketchfab.com/3d-models/capsule-shape-39f69db3daa34335a179c8f8924a8f83
+* author:	djmecha404 (https://sketchfab.com/djmecha404)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Capsule shape" (https://sketchfab.com/3d-models/capsule-shape-39f69db3daa34335a179c8f8924a8f83) by djmecha404 (https://sketchfab.com/djmecha404) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

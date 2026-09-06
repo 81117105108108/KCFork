@@ -13,7 +13,7 @@ local TEXT_SIZE = 13
 return function(params: typedefs.WidgetParams, dt: number)
 	local window = params.engine_window
 	local theme = params.theme
-	local renderer = params.renderer
+	local renderer = params.renderer or (typeof(renderer) ~= "nil" and renderer or nil)
 
 	Rectangle({
 		x = params.x,
