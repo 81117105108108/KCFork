@@ -1,3 +1,4 @@
+--!strict
 local thread = zune.thread
 local preprocessor = require("./Transpiler")
 local luau = zune.luau
@@ -15,9 +16,10 @@ while true do
 			continue
 		end
 
-		local bytecode, compile_err = luau.compile(req.code, { optimization_level = 2 })
-		if not bytecode then
-			thread.send({ id = req.id, error = compile_err })
+		-- Compilation errors must fail this request, not terminate the worker.
+		local compiled, bytecode, compile_err = pcall(luau.compile, transpiledCode, { optimization_level = 2 })
+		if not compiled or not bytecode then
+			thread.send({ id = req.id, error = if compiled then compile_err else tostring(bytecode) })
 			continue
 		end
 

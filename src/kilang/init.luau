@@ -1,10 +1,13 @@
+--!strict
 -- kilang.lua
 -- Runtime execution module for the Kinemium/Zune engine
 
 local kilang = {}
 
 local preprocessor = require("./kilang/Transpiler")
+local SandboxEnvironment = require("./kilang/SandboxEnvironment")
 local luau = zune.luau
+local task = zune.task
 
 --  State
 
@@ -14,21 +17,29 @@ kilang.threads = {}
 
 --  Internal: bytecode compile + load + exec
 
-local function run_code(code, env, chunk, native_code_gen)
-	local bytecode, compile_err = luau.compile(code, {
+local function run_code(code: string, env: SandboxEnvironment.Environment, chunk: string, native_code_gen: boolean): (unknown, boolean, unknown)
+	local compiled, bytecode = pcall(luau.compile, code, {
 		optimization_level = 2,
 	})
-	if not bytecode then
-		return nil, false, compile_err
+	if not compiled then
+		return nil, false, tostring(bytecode)
 	end
 
-	local thread = luau.load(bytecode, {
+	local trusted = env.SecurityCapabilities == 2
+	if trusted then
+		env = setmetatable(env, { __index = getfenv(1) })
+	else
+		env = SandboxEnvironment.create(env)
+	end
+	local loaded, thread = pcall(luau.load, bytecode, {
 		env = env,
 		chunk_name = chunk,
-		native_code_gen = native_code_gen,
+		native_code_gen = trusted and native_code_gen or false,
 	})
-
-	setfenv(thread, setmetatable(env, { __index = getfenv(1) }))
+	if not loaded then
+		return nil, false, tostring(thread)
+	end
+	setfenv(thread, env)
 
 	local ok, result = pcall(thread)
 	return (ok and result or nil), ok, result
