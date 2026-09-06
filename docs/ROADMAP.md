@@ -18,7 +18,8 @@ planned file does not exist, the actual implementation/integration point is list
 | 5.2 | Bit-packed delta replication | PENDING | `src/engine/network/Replicator.luau` | `src/environment/game/services/ReplicatorService/ReplicatorService.luau` |
 | 6 | CSTMOD + Zstd serialization | PENDING | `src/engine/formats/CSTMOD.luau` | not found |
 | 7.1 | Type defs + `--!strict` | PENDING | `k.d.luau`, `zune.d.luau` | both exist; strict not enforced repo-wide |
-| 7.2 | Headless test runner + CI | PENDING | `tests/run_tests.luau`, `.github/workflows/ci.yml` | `tests/*.luau` (5 files, no runner), no CI workflow |
+| — | Upstream sync | DONE | — | merged `quadigen/Kinemium-Canary` 3 commits (`Actions fix`, `Audio, Lights`, `Removed build check`) into fork; 6 conflicts resolved |
+| 7.2 | Headless test runner + CI | PARTIAL | `tests/run_tests.luau`, `.github/workflows/ci.yml` | `.github/workflows/main.yml` builds 3 OSes but runs no tests; 11 test files, no single runner |
 
 ---
 
@@ -175,11 +176,21 @@ engine scripts. New files created this roadmap pass are `--!strict`.
 ## Phase 7.2 — Headless Test Runner & CI — PENDING
 
 **Planned** `tests/run_tests.luau` + `.github/workflows/ci.yml`.
-**Actual** `tests/instance_lifecycle.luau`, `tests/physics_service.luau`, `tests/rendering.luau`,
-`tests/resource_tracker.luau`, `tests/rendering_native.py`, plus `tests/frustum.luau` NEW.
-No single runner, no CI workflow, no FFI symbol validation.
-CI must: build `JoltWrapper` (CMake + Jolt `FetchContent`), run all `tests/*.luau` on Linux + Windows,
-and validate exported FFI symbols incl. `JPH_BodyInterface_GetBulkTransforms`.
+**Actual** `.github/workflows/main.yml` **exists** (added by upstream's "Actions fix" commit) — builds
+Windows/macOS/Ubuntu via Rokit with submodules. It does **not** run `tests/*.luau` or validate FFI symbols.
+**Status: PARTIAL** (was incorrectly listed as PENDING — CI exists but does not gate on tests).
+
+Tests: `instance_lifecycle.luau`, `physics_service.luau`, `rendering.luau`, `resource_tracker.luau`,
+`rendering_native.py`, plus NEW `frustum.luau`, `octree.luau`, `phase2_benchmark.luau`,
+`kilang_runtime.luau`, `kilang_worker.luau`, `sandbox_environment.luau`. No single runner.
+
+Still needed: a `tests/run_tests.luau` runner, a CI job that runs it on Linux + Windows, and
+FFI symbol validation incl. `JPH_BodyInterface_GetBulkTransforms`.
+
+**Known pre-existing failures (not caused by roadmap work)**
+- `tests/rendering.luau` — 17 failures at clean HEAD, unrelated to Phases 1/2
+- `tests/physics_service.luau` — flaky wall-clock perf assert (~1.5–1.8 ms against a 1.5 ms budget)
+- `tests/instance_lifecycle.luau` — `@EnumMap` alias unresolved under bare `zune test`
 
 ---
 
