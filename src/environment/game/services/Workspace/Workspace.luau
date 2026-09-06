@@ -5,6 +5,8 @@ local CFrame = require("@CFrame")
 local argon = require("@Argon")
 local zembed = require("@zembed")
 local Vector3 = require("@Vector3")
+local Frustum = require("../../../datatypes/Frustum")
+local Octree = require("../../../datatypes/Octree")
 
 export type KinemiumCFrame = typeof(CFrame.new())
 Workspace._Intents = Enum.PluginIntents.Graphic
@@ -45,6 +47,7 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		displacedCube = argon:CreateMesh(renderer.Window, "displacedCube"),
 		sphere = argon:CreateMesh(renderer.Window, "sphere"),
 		cylinder = argon:CreateMesh(renderer.Window, "cylinder"),
+		wedge = argon:CreateMesh(renderer.Window, "wedge"),
 	}
 	Workspace.MeshesPreset = meshes
 
@@ -128,6 +131,9 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		if shape == Enum.PartType.Cylinder then
 			return meshes.cylinder
 		end
+		if shape == Enum.PartType.Wedge or shape == Enum.PartType.CornerWedge then
+			return meshes.wedge
+		end
 		if displacedMaterials[material] then
 			return meshes.displacedCube
 		end
@@ -139,6 +145,11 @@ Workspace.InitRenderer = function(renderer, signal, game)
 	local metadataDirty = true
 	local dynamicGroups = {}
 	local dynamicPartState = {}
+	local spatialIndex = Octree.new(Vector3.new(0, 0, 0), 1048576, 32, 8, 1.5)
+	local spatialOverflow = {}
+	local nextSpatialId = 0
+	local frameFrustum: Frustum.Frustum? = nil
+	local cullStats = { testedGroups = 0, culledGroups = 0, testedParts = 0, visibleParts = 0, culledParts = 0 }
 	local renderProperties = {
 		Size = true,
 		Color = true,
@@ -259,6 +270,27 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		return size
 	end
 
+	local function updateSpatialState(state, props)
+		local position = props.CFrame and props.CFrame.Position
+		local size = getRenderScale(props)
+		if not position or not size then
+			return
+		end
+		local radius = 0.5 * math.sqrt(size.X * size.X + size.Y * size.Y + size.Z * size.Z)
+		state.bounds = {
+			id = state.spatialId,
+			position = position,
+			size = Vector3.new(radius, radius, radius),
+			data = state,
+		}
+		spatialIndex:Remove(state.spatialId)
+		if spatialIndex:Insert(state.bounds) then
+			spatialOverflow[state] = nil
+		else
+			spatialOverflow[state] = true
+		end
+	end
+
 	local function updateDrawCallTransform(drawCall, props)
 		drawCall.matrix = nil
 		drawCall.cframe = props.CFrame
@@ -282,6 +314,9 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		end
 		table.clear(dynamicGroups)
 		table.clear(dynamicPartState)
+		spatialIndex:Clear()
+		table.clear(spatialOverflow)
+		nextSpatialId = 0
 	end
 
 	local function fillDrawCall(drawCall, object, props)
@@ -366,12 +401,16 @@ Workspace.InitRenderer = function(renderer, signal, game)
 			fillDrawCall(drawCall, object, props)
 			table.insert(group.drawCalls, drawCall)
 			table.insert(group.parts, object)
-			dynamicPartState[object] = {
+			nextSpatialId += 1
+			local state = {
 				group = group,
 				object = object,
 				index = #group.parts - 1,
+				spatialId = nextSpatialId,
 				dirty = false,
 			}
+			dynamicPartState[object] = state
+			updateSpatialState(state, props)
 		end
 
 		for _, group in pairs(dynamicGroups) do
@@ -379,6 +418,32 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		end
 
 		metadataDirty = false
+	end
+
+	local function buildFrameFrustum(): Frustum.Frustum?
+		local ok, cam = pcall(function()
+			return renderer:GetActiveCamera()
+		end)
+		if not ok or cam == nil then
+			return nil
+		end
+		local cfOk, cf = pcall(function()
+			return cam.CFrame
+		end)
+		if not cfOk or cf == nil then
+			return nil
+		end
+		local fov = 70
+		local fovOk, fovValue = pcall(function()
+			return cam.FieldOfView
+		end)
+		if fovOk and type(fovValue) == "number" and fovValue > 0 then
+			fov = fovValue
+		end
+		local width = tonumber(renderer.Width) or 16
+		local height = tonumber(renderer.Height) or 9
+		local aspect = if height > 0 then width / height else 16 / 9
+		return Frustum.fromCFrame(cf, fov, aspect, 0.1, 10000)
 	end
 
 	local function flushTransformUpdates()
@@ -392,6 +457,7 @@ Workspace.InitRenderer = function(renderer, signal, game)
 						state.matrix = nil
 						state.cframe = props.CFrame
 						state.scale = getRenderScale(props)
+						updateSpatialState(state, props)
 					end
 				end
 				renderer.MeshPool.UpdateInstanceTransforms(group.batch, updates, #updates)
@@ -406,12 +472,58 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		end
 	end
 
+	local function updateBatchVisibility()
+		local visibleByGroup = {}
+		local totalParts = 0
+		for _, group in pairs(dynamicGroups) do
+			visibleByGroup[group] = {}
+			totalParts += #group.parts
+		end
+
+		local candidates = {}
+		if frameFrustum then
+			candidates = spatialIndex:QueryAABB(frameFrustum.boundsCenter, frameFrustum.boundsHalfSize)
+			for state in pairs(spatialOverflow) do
+				table.insert(candidates, state.bounds)
+			end
+		else
+			for _, state in pairs(dynamicPartState) do
+				table.insert(candidates, state.bounds)
+			end
+		end
+
+		local visibleParts = 0
+		for _, bounds in ipairs(candidates) do
+			local state = bounds.data
+			if state and (not frameFrustum or Frustum.TestAABB(frameFrustum, bounds.position, bounds.size)) then
+				table.insert(visibleByGroup[state.group], state.index)
+				visibleParts += 1
+			end
+		end
+
+		cullStats.testedGroups = 0
+		cullStats.culledGroups = 0
+		for group, indices in pairs(visibleByGroup) do
+			cullStats.testedGroups += 1
+			if #indices == 0 then
+				cullStats.culledGroups += 1
+			end
+			if group.batch and renderer.MeshPool.SetInstanceBatchVisibility then
+				renderer.MeshPool.SetInstanceBatchVisibility(group.batch, indices, #indices)
+			end
+		end
+		cullStats.testedParts = #candidates
+		cullStats.visibleParts = visibleParts
+		cullStats.culledParts = totalParts - visibleParts
+	end
+
 	renderer.Hook.new("Renderstep", function()
 		if metadataDirty then
 			rebuildDynamicGroups()
-		else
-			flushTransformUpdates()
 		end
+		frameFrustum = buildFrameFrustum()
+		flushTransformUpdates()
+		updateBatchVisibility()
 	end)
 
 	renderer.Hook.new("Shutdown", function()
@@ -420,6 +532,16 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		descendantRemoving:Disconnect()
 		descendantChanged:Disconnect()
 	end)
+
+	Workspace.GetFrustumCullStats = function()
+		return {
+			testedGroups = cullStats.testedGroups,
+			culledGroups = cullStats.culledGroups,
+			testedParts = cullStats.testedParts,
+			visibleParts = cullStats.visibleParts,
+			culledParts = cullStats.culledParts,
+		}
+	end
 end
 
 return Workspace
