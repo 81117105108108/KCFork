@@ -905,6 +905,14 @@ local funcs = {
 			ffi.types.u32, -- dirtyCount
 		},
 	},
+	Kine_Filament_SetInstanceBatchVisibility = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- KineFilamentInstanceBatch*
+			ffi.types.pointer, -- uint32_t[] or null
+			ffi.types.u32, -- visibleCount
+		},
+	},
 	Kine_Filament_DrawParticles = {
 		returns = ffi.types.void,
 		args = {

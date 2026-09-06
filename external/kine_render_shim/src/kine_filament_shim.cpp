@@ -365,6 +365,9 @@ struct KineFilamentInstanceBatch {
     KineBatchKey key;
     MaterialInstance* matInst = nullptr;
     std::vector<math::mat4f> transforms;
+    std::vector<uint32_t> visibleIndices;
+    std::vector<math::mat4f> visibleTransforms;
+    std::vector<int32_t> visibleSlots;
     std::vector<KineBuiltBatch> chunks;
     std::vector<uint32_t> dirtyIndices;
 };
@@ -1245,6 +1248,31 @@ static KineMesh* buildCylinder(int slices = 24)
     return m;
 }
 
+static KineMesh* buildWedge()
+{
+    auto* m = new KineMesh();
+    const math::float3 a{-0.5f,-0.5f,-0.5f}, b{-0.5f, 0.5f, 0.5f}, c{-0.5f,-0.5f, 0.5f};
+    const math::float3 d{ 0.5f,-0.5f,-0.5f}, e{ 0.5f,-0.5f, 0.5f}, f{ 0.5f, 0.5f, 0.5f};
+    auto triangle = [m](math::float3 p0, math::float3 p1, math::float3 p2) {
+        const math::float3 u = p1 - p0;
+        const math::float3 v = p2 - p0;
+        math::float3 normal{u.y*v.z-u.z*v.y, u.z*v.x-u.x*v.z, u.x*v.y-u.y*v.x};
+        const float length = sqrtf(normal.x*normal.x + normal.y*normal.y + normal.z*normal.z) + 1e-9f;
+        normal = normal * (1.0f / length);
+        const uint16_t base = (uint16_t)m->vertices.size();
+        m->vertices.push_back({p0.x,p0.y,p0.z,normal.x,normal.y,normal.z,0,0});
+        m->vertices.push_back({p1.x,p1.y,p1.z,normal.x,normal.y,normal.z,1,0});
+        m->vertices.push_back({p2.x,p2.y,p2.z,normal.x,normal.y,normal.z,1,1});
+        m->indices.push_back(base); m->indices.push_back(base + 1); m->indices.push_back(base + 2);
+    };
+    triangle(a, c, b); triangle(d, f, e);
+    triangle(a, d, e); triangle(a, e, c);
+    triangle(c, e, f); triangle(c, f, b);
+    triangle(a, b, f); triangle(a, f, d);
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
 static KineMesh* buildPyramid()
 {
     auto* m = new KineMesh();
@@ -1984,6 +2012,19 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
     KineMesh* mesh = batch->key.mesh;
     if (!mesh || !mesh->vb || !mesh->ib) return false;
 
+    batch->visibleTransforms.clear();
+    batch->visibleTransforms.reserve(batch->visibleIndices.size());
+    batch->visibleSlots.assign(batch->transforms.size(), -1);
+    for (uint32_t index : batch->visibleIndices) {
+        if (index >= batch->transforms.size()) continue;
+        batch->visibleSlots[index] = (int32_t)batch->visibleTransforms.size();
+        batch->visibleTransforms.push_back(batch->transforms[index]);
+    }
+    if (batch->visibleTransforms.empty()) {
+        kine_destroy_instance_batch_chunks(batch);
+        return true;
+    }
+
     Material* base = kine_select_material(ctx, batch->key.materialKind, batch->key.shader);
     if (!base) return false;
 
@@ -1998,9 +2039,9 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
     if (maxInstances == 0) maxInstances = 1;
 
     size_t offset = 0;
-    while (offset < batch->transforms.size()) {
-        const size_t count = std::min(maxInstances, batch->transforms.size() - offset);
-        const math::mat4f* chunkTransforms = batch->transforms.data() + offset;
+    while (offset < batch->visibleTransforms.size()) {
+        const size_t count = std::min(maxInstances, batch->visibleTransforms.size() - offset);
+        const math::mat4f* chunkTransforms = batch->visibleTransforms.data() + offset;
         const Box bounds = kine_compute_dynamic_batch_bounds(mesh, chunkTransforms, count);
 
         InstanceBuffer* instanceBuffer = InstanceBuffer::Builder(count).build(*ctx->engine);
@@ -4445,6 +4486,8 @@ KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, in
         case 10: m = buildMoveGizmo(); break;
         case 11: m = buildRotateGizmo(); break;
         case 12: m = buildScaleGizmo(); break;
+        case 7:  m = buildWedge(); break;
+        case 6:  m = buildCylinder(); break;
         case 5:  m = buildDisplacedCube(); break;
         case 4:  m = buildParticleQuad(); break;
         case 6:  m = buildCylinder(); break;
@@ -4882,6 +4925,7 @@ KINE_API KineFilamentInstanceBatch* Kine_Filament_CreateInstanceBatch(
             return nullptr;
         }
         batch->transforms.push_back(kine_draw_item_transform(items[i]));
+        batch->visibleIndices.push_back(i);
     }
 
     if (!kine_rebuild_instance_batch(batch)) {
@@ -4927,13 +4971,18 @@ KINE_API void Kine_Filament_UpdateInstanceTransforms(
         if (index >= batch->transforms.size()) continue;
 
         const float* mat4 = transforms + ((size_t)i * 16);
-        batch->transforms[index] = math::mat4f(
+        const math::mat4f transform(
             math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
             math::float4{mat4[1], mat4[5], mat4[9],  mat4[13]},
             math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
             math::float4{mat4[3], mat4[7], mat4[11], mat4[15]}
         );
-        dirtyIndices.push_back(index);
+        batch->transforms[index] = transform;
+        const int32_t slot = index < batch->visibleSlots.size() ? batch->visibleSlots[index] : -1;
+        if (slot >= 0) {
+            batch->visibleTransforms[(size_t)slot] = transform;
+            dirtyIndices.push_back((uint32_t)slot);
+        }
     }
 
     if (dirtyIndices.empty()) return;
@@ -4965,7 +5014,7 @@ KINE_API void Kine_Filament_UpdateInstanceTransforms(
 
         const size_t count = (size_t)last - (size_t)first + 1;
         chunk.instanceBuffer->setLocalTransforms(
-            batch->transforms.data() + first,
+            batch->visibleTransforms.data() + first,
             count,
             first - chunkBase);
 
@@ -4979,10 +5028,32 @@ KINE_API void Kine_Filament_UpdateInstanceTransforms(
             if (renderable.isValid()) {
                 rm.setAxisAlignedBoundingBox(renderable,
                     kine_compute_dynamic_batch_bounds(batch->key.mesh,
-                        batch->transforms.data() + chunkBase, chunk.instanceCount));
+                        batch->visibleTransforms.data() + chunkBase, chunk.instanceCount));
             }
         }
     }
+}
+
+KINE_API void Kine_Filament_SetInstanceBatchVisibility(
+    KineFilamentInstanceBatch* batch,
+    const uint32_t* indices,
+    uint32_t visibleCount)
+{
+    if (!batch || !batch->ctx || !batch->ctx->engine) return;
+
+    std::vector<uint32_t> visible;
+    visible.reserve(visibleCount);
+    for (uint32_t i = 0; i < visibleCount; ++i) {
+        if (indices && indices[i] < batch->transforms.size()) {
+            visible.push_back(indices[i]);
+        }
+    }
+    std::sort(visible.begin(), visible.end());
+    visible.erase(std::unique(visible.begin(), visible.end()), visible.end());
+    if (visible == batch->visibleIndices) return;
+
+    batch->visibleIndices.swap(visible);
+    kine_rebuild_instance_batch(batch);
 }
 
 KINE_API void Kine_Filament_DrawMeshOutline(

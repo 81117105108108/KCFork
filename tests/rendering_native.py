@@ -50,6 +50,9 @@ struct mat4f {
           float4 c={0,0,1,0}, float4 d={0,0,0,1}) : cols{a,b,c,d} {}
 };
 }
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 struct Box {
     math::float3 center, halfExtent;
     void unionSelf(const Box& b) {
@@ -69,7 +72,13 @@ Box rigidTransform(Box b, const math::mat4f& m) {
              std::abs(c[0].y)*b.halfExtent.x+std::abs(c[1].y)*b.halfExtent.y+std::abs(c[2].y)*b.halfExtent.z,
              std::abs(c[0].z)*b.halfExtent.x+std::abs(c[1].z)*b.halfExtent.y+std::abs(c[2].z)*b.halfExtent.z}};
 }
-struct KineMesh { Box localBounds{{0,0,0},{1,2,3}}; };
+struct KineVertex { float px,py,pz,nx,ny,nz,u,v; };
+struct KineMesh {
+    Box localBounds{{0,0,0},{1,2,3}};
+    std::vector<KineVertex> vertices;
+    std::vector<uint16_t> indices;
+    uint32_t indexCount=0;
+};
 struct InstanceBuffer {
     std::vector<std::array<size_t,2>> writes;
     void setLocalTransforms(const math::mat4f*, size_t count, size_t offset) { writes.push_back({count,offset}); }
@@ -107,9 +116,14 @@ struct KineFilamentInstanceBatch {
     KineFilamentContext* ctx=nullptr;
     KineBatchKey key;
     std::vector<math::mat4f> transforms;
+    std::vector<uint32_t> visibleIndices;
+    std::vector<math::mat4f> visibleTransforms;
+    std::vector<int32_t> visibleSlots;
     std::vector<KineBuiltBatch> chunks;
     std::vector<uint32_t> dirtyIndices;
 };
+int visibilityRebuilds=0;
+bool kine_rebuild_instance_batch(KineFilamentInstanceBatch*) { ++visibilityRebuilds; return true; }
 struct KineFilamentDrawItem {
     KineMesh* mesh=nullptr; int materialKind=0;
     float r=0,g=0,b=0,param1=0,param2=0,param3=0,transmission=0;
@@ -125,12 +139,21 @@ void kine_queue_mesh(KineFilamentContext* ctx,KineMesh* mesh,int,float,float,flo
 
 TESTS = r"""
 int main() {
+    auto* cylinder=buildCylinder();
+    assert(cylinder->vertices.size()==100 && cylinder->indices.size()==288);
+    delete cylinder;
+    auto* wedge=buildWedge();
+    assert(wedge->vertices.size()==24 && wedge->indices.size()==24);
+    delete wedge;
     Engine engine;
     KineFilamentContext ctx; ctx.engine=&engine;
     KineMesh mesh;
     InstanceBuffer first, second;
     KineFilamentInstanceBatch batch;
     batch.ctx=&ctx; batch.key.mesh=&mesh; batch.transforms.resize(8);
+    batch.visibleIndices={0,1,2,3,4,5,6,7};
+    batch.visibleTransforms=batch.transforms;
+    batch.visibleSlots={0,1,2,3,4,5,6,7};
     batch.chunks={{0,&first,4},{1,&second,4}};
     const uint32_t indices[]={6,0,2,2,999};
     float matrices[5*16]{};
@@ -158,6 +181,15 @@ int main() {
     assert(first.writes.size()==1 && first.writes[0][0]==4);
     assert(second.writes.size()==1 && second.writes[0][0]==1);
     assert(engine.manager.updates[0]==2 && engine.manager.updates[1]==2);
+    const uint32_t visible[]={7,2,2,999};
+    Kine_Filament_SetInstanceBatchVisibility(&batch,visible,4);
+    assert((batch.visibleIndices==std::vector<uint32_t>{2,7}));
+    assert(visibilityRebuilds==1);
+    const uint32_t sameVisible[]={7,2};
+    Kine_Filament_SetInstanceBatchVisibility(&batch,sameVisible,2);
+    assert(visibilityRebuilds==1);
+    Kine_Filament_SetInstanceBatchVisibility(&batch,nullptr,0);
+    assert(batch.visibleIndices.empty() && visibilityRebuilds==2);
     // Retained data recovers if a failed compositor frame prevented GPU build.
     ctx.batchFrame=9;
     KineFilamentDrawItem item; item.mesh=&mesh;
@@ -178,9 +210,12 @@ def main() -> None:
     root = Path(os.environ.get("KINE_RENDER_TEST_ROOT", Path(__file__).resolve().parents[1]))
     source = (root / "external/kine_render_shim/src/kine_filament_shim.cpp").read_text(encoding="utf-8")
     signatures = [
+        "static KineMesh* buildCylinder(",
+        "static KineMesh* buildWedge(",
         "static Box kine_compute_batch_bounds(",
         "static Box kine_compute_dynamic_batch_bounds(",
         "KINE_API void Kine_Filament_UpdateInstanceTransforms(",
+        "KINE_API void Kine_Filament_SetInstanceBatchVisibility(",
         "KINE_API void Kine_Filament_DrawMeshListVersioned(",
     ]
     compiler = os.environ.get("CXX") or next((p for name in ("cl", "clang++", "g++") if (p := shutil.which(name))), None)

@@ -360,6 +360,13 @@ KINE_API void Kine_Filament_UpdateInstanceTransforms(
     const float* transforms,
     uint32_t dirtyCount);
 
+/* Rebuilds the retained GPU batch with only the selected source instances.
+   Passing zero indices removes all batch entities from the scene. */
+KINE_API void Kine_Filament_SetInstanceBatchVisibility(
+    KineFilamentInstanceBatch* batch,
+    const uint32_t* indices,
+    uint32_t visibleCount);
+
 KINE_API void Kine_Filament_DrawParticles(
     KineFilamentContext* ctx,
     KineFilamentTex* texture,

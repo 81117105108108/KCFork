@@ -452,6 +452,12 @@ function KiRend.new(config: KiRendConf)
 				argon:UpdateInstanceTransforms(window, batch, updates, count)
 			end,
 
+			SetInstanceBatchVisibility = function(batch, indices, count)
+				if argon.SetInstanceBatchVisibility then
+					argon:SetInstanceBatchVisibility(window, batch, indices, count)
+				end
+			end,
+
 			DestroyInstanceBatch = function(batch)
 				if not argon.DestroyInstanceBatch then
 					return

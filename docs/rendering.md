@@ -123,6 +123,17 @@ For d dirty updates and t instances in touched chunks, update work is
 O(d log d + t), with O(d) reusable scratch space. This is a correctness tradeoff:
 accurate bounds require inspecting the touched chunks, not only dirty transforms.
 
+`SetInstanceBatchVisibility` accepts a dense list of zero-based source indices.
+Native code sorts and deduplicates the list, rebuilds only when visibility changes,
+and retains the complete source transform array so hidden instances can keep moving.
+An empty list destroys the batch's scene entities; restoring indices rebuilds them.
+
+`Workspace` supports instanced block, sphere, cylinder, and wedge primitives. It
+uses a loose octree for broad-phase camera queries, then tests each candidate
+against all six frustum planes. Rotated parts use a conservative bounding sphere
+encoded as an AABB, avoiding false-negative culls. Objects beyond the octree's
+configured world bounds are tested through a fail-open overflow set.
+
 ## FFI layout and ownership
 
 `KineFilamentDrawItem` is 120 bytes on the supported ABI. The adapter asserts this
@@ -164,7 +175,18 @@ zune run tests/rendering.luau
 This runs the production Luau modules against deterministic graphics/FFI doubles.
 It covers event order, camera roll, pool ordering/mutation/ID collisions, batched
 submissions and callback boundaries, compositing, retained versions, affine layout,
-indices, buffer isolation, cleanup, and allocation failure.
+indices, primitive mapping, visible-index packing, buffer isolation, cleanup,
+and allocation failure. Spatial checks are separate:
+
+```powershell
+zune test tests/frustum.luau
+zune test tests/octree.luau
+zune test tests/phase2_benchmark.luau
+```
+
+The benchmark checks 5,000 indexed primitive bounds over 100 culling frames and
+fails if the average CPU culling time exceeds the 60 Hz frame budget. GPU FPS and
+driver draw-call counts still require the release integration run below.
 
 Run the native CPU regression in a Visual Studio developer shell or a shell with
 clang++/g++ available:
@@ -175,9 +197,10 @@ python tests/rendering_native.py
 
 Set `CXX` to the compiler executable if necessary. The test extracts and compiles
 the actual native bounds, instance-update, and retained-list functions with a
-minimal fake GPU API. It verifies chunk bounds/coalescing, scaled and translated
-instances, duplicate and invalid indices, and retry of retained uploads. It does
-not link Filament or verify driver behavior.
+minimal fake GPU API. It verifies primitive topology, chunk bounds/coalescing,
+scaled and translated instances, visible-index compaction, duplicate and invalid
+indices, and retry of retained uploads. It does not link Filament or verify driver
+behavior.
 
 Optional CPU benchmark:
 

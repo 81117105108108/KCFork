@@ -160,7 +160,8 @@ function Octree:Update(obj: AABB)
 end
 
 function Octree:_query(node: Node, center: Vector3, size: Vector3, result: { AABB })
-	if not intersects(node.center, Vector3.new(node.size, node.size, node.size), center, size) then
+	local looseSize = node.size * self.loose
+	if not intersects(node.center, Vector3.new(looseSize, looseSize, looseSize), center, size) then
 		return
 	end
 

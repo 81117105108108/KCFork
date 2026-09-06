@@ -698,14 +698,15 @@ end
 
 function filamentAdapter:CreateMesh(
 	window: typedefs.Window,
-	meshType: "cube" | "displacedCube" | "sphere" | "cylinder" | "pyramid" | "quad" | "moveGizmo" | "rotateGizmo" | "scaleGizmo"
+	meshType: "cube" | "displacedCube" | "sphere" | "cylinder" | "wedge" | "pyramid" | "quad" | "moveGizmo" | "rotateGizmo" | "scaleGizmo"
 ): typedefs.Mesh
 	local map = {
 		["cube"] = 1,
 		["displacedCube"] = 5,
 		["sphere"] = 2,
-		["cylinder"] = 6,
-		["pyramid"] = 3,
+	["cylinder"] = 6,
+	["wedge"] = 7,
+	["pyramid"] = 3,
 		["quad"] = 4,
 		["moveGizmo"] = 10,
 		["rotateGizmo"] = 11,
@@ -1065,6 +1066,29 @@ function filamentAdapter:UpdateInstanceTransforms(
 	if dirtyCount > 0 then
 		filament.lib.Kine_Filament_UpdateInstanceTransforms(batch, indices, transforms, dirtyCount)
 	end
+end
+
+function filamentAdapter:SetInstanceBatchVisibility(
+	window: typedefs.Window,
+	batch,
+	indices: { number },
+	visibleCount: number?
+)
+	if not batch or batch == zune.ffi.null then
+		return
+	end
+
+	local requestedCount = math.min(visibleCount or #indices, #indices)
+	local buffer = if requestedCount > 0 then getRawBuffer(indexBuffers, window, requestedCount * 4) else zune.ffi.null
+	local packedCount = 0
+	for i = 1, requestedCount do
+		local index = indices[i]
+		if type(index) == "number" and index >= 0 and index < 4294967296 and index % 1 == 0 then
+			buffer:writeu32(packedCount * 4, index)
+			packedCount += 1
+		end
+	end
+	filament.lib.Kine_Filament_SetInstanceBatchVisibility(batch, buffer, packedCount)
 end
 
 function filamentAdapter:DrawParticles(

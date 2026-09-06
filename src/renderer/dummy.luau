@@ -334,6 +334,13 @@ function KiRend.new(config: KiRendConf)
 				end
 			end,
 
+			SetInstanceBatchVisibility = function(batch, indices, count)
+				if batch then
+					batch.visibleIndices = table.clone(indices)
+					batch.visibleCount = count or #indices
+				end
+			end,
+
 			DestroyInstanceBatch = function(batch) end,
 
 			DrawMeshInstanced = function(mesh, material, instances, count, begin, End, unloadAfterFrame)

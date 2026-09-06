@@ -1647,6 +1647,7 @@ SDLAdapter.DrawMesh = filament.DrawMesh
 SDLAdapter.DrawMeshList = filament.DrawMeshList
 SDLAdapter.CreateInstanceBatch = filament.CreateInstanceBatch
 SDLAdapter.UpdateInstanceTransforms = filament.UpdateInstanceTransforms
+SDLAdapter.SetInstanceBatchVisibility = filament.SetInstanceBatchVisibility
 SDLAdapter.DestroyInstanceBatch = filament.DestroyInstanceBatch
 SDLAdapter.DrawMeshOutline = filament.DrawMeshOutline
 SDLAdapter.DrawGizmo = filament.DrawGizmo

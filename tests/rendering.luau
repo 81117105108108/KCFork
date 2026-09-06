@@ -245,8 +245,11 @@ local function makeAdapter()
 		return pointer
 	end
 	function ffi.free(pointer) assert(not pointer.freed, "Double free"); pointer.freed = true end
+	-- Mirrors KineFilamentDrawItem in external/kine_render_shim/include/kine_filament_shim.h.
+	-- The trailing `shader` pointer makes the packed size 128 (was 120 before it was added).
 	local offsets = { mesh = 0, tex = 8, transform = 16, r = 80, g = 84, b = 88, param1 = 92,
-		param2 = 96, param3 = 100, transmission = 104, materialKind = 108, flags = 112, reserved = 116 }
+		param2 = 96, param3 = 100, transmission = 104, materialKind = 108, flags = 112,
+		reserved = 116, shader = 120 }
 	local lib = setmetatable({}, { __index = function(_, name)
 		return function(...)
 			calls[#calls + 1] = { name = name, args = { ... } }
@@ -259,7 +262,7 @@ local function makeAdapter()
 		require = function(name)
 			if name == "./filament" then
 				return { lib = lib, structs = { KineFilamentDrawItem = {
-					size = function() return 120 end, offset = function(_, key) return offsets[key] end,
+					size = function() return 128 end, offset = function(_, key) return offsets[key] end,
 				} } }
 			end
 			equal(name, "../../typedefs")
@@ -327,6 +330,22 @@ test("instance creation rejects holes instead of shifting update indices", funct
 	equal(#calls, 0)
 end)
 
+test("primitive mesh names map to distinct native shapes", function()
+	local adapter, calls = makeAdapter()
+	local window = { _3dhandle = {} }
+	adapter:CreateMesh(window, "cube")
+	adapter:CreateMesh(window, "sphere")
+	adapter:CreateMesh(window, "cylinder")
+	adapter:CreateMesh(window, "wedge")
+	local shapes = {}
+	for _, call in ipairs(calls) do
+		if call.name == "Kine_Filament_CreateMesh" then
+			table.insert(shapes, call.args[2])
+		end
+	end
+	equal(table.concat(shapes, ","), "1,2,6,7")
+end)
+
 test("invalid instance indices never reach native code", function()
 	local adapter, calls = makeAdapter()
 	local updates = {}
@@ -337,6 +356,21 @@ test("invalid instance indices never reach native code", function()
 	adapter:UpdateInstanceTransforms({ _3dhandle = {} }, {}, updates)
 	equal(calls[#calls].args[4], 1)
 	equal(calls[#calls].args[2].values[0], 0)
+end)
+
+test("instance visibility packs valid indices and supports an empty batch", function()
+	local adapter, calls, _, null = makeAdapter()
+	local window, batch = { _3dhandle = {} }, {}
+	adapter:SetInstanceBatchVisibility(window, batch, { 5, -1, 2.5, 3 })
+	local call = calls[#calls]
+	equal(call.name, "Kine_Filament_SetInstanceBatchVisibility")
+	equal(call.args[3], 2)
+	equal(call.args[2].values[0], 5)
+	equal(call.args[2].values[4], 3)
+	adapter:SetInstanceBatchVisibility(window, batch, {})
+	call = calls[#calls]
+	equal(call.args[2], null)
+	equal(call.args[3], 0)
 end)
 
 test("readback buffers are isolated per window and absent on Vulkan", function()
