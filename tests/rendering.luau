@@ -272,6 +272,25 @@ local function makeAdapter()
 	return adapter, calls, allocations, null, function(value) failAllocation = value end
 end
 
+test("camera adapter forwards native look-at arguments and defaults up", function()
+	local adapter, calls, _, null = makeAdapter()
+	local window = { _3dhandle = {} }
+	local position, target = vector.create(2, 3, 4), vector.create(5, 6, 7)
+	adapter:SetCameraLookAt(window, position, target, vector.create(0.6, 0, -0.8))
+	adapter:SetCameraLookAt(window, position, target)
+	equal(#calls, 2)
+	for index, call in ipairs(calls) do
+		equal(call.name, "Kine_Filament_SetCameraLookAt")
+		local up = if index == 1 then vector.create(0.6, 0, -0.8) else vector.create(0, 1, 0)
+		local expected = { window._3dhandle, 2, 3, 4, 5, 6, 7, up.X, up.Y, up.Z }
+		equal(#call.args, #expected)
+		for argument, value in ipairs(expected) do equal(call.args[argument], value) end
+	end
+	adapter:SetCameraLookAt({}, position, target)
+	adapter:SetCameraLookAt({ _3dhandle = null }, position, target)
+	equal(#calls, 2)
+end)
+
 local function makeDraw()
 	return { mesh = { _handle = {} }, color = { R = 1, G = 0.5, B = 0 },
 		cframe = { Position = { X = 10, Y = 20, Z = 30 }, Rotation = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } } },

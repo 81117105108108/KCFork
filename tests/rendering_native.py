@@ -124,15 +124,19 @@ struct KineFilamentInstanceBatch {
 };
 int visibilityRebuilds=0;
 bool kine_rebuild_instance_batch(KineFilamentInstanceBatch*) { ++visibilityRebuilds; return true; }
+struct KineFilamentShader {};
 struct KineFilamentDrawItem {
     KineMesh* mesh=nullptr; int materialKind=0;
     float r=0,g=0,b=0,param1=0,param2=0,param3=0,transmission=0;
     float transform[16]{};
     uint32_t flags=0; void* tex=nullptr;
+    KineFilamentShader* shader=nullptr;
 };
 constexpr uint32_t KINE_FILAMENT_DRAW_CAST_SHADOWS=1, KINE_FILAMENT_DRAW_RECEIVE_SHADOWS=2, KINE_FILAMENT_DRAW_CULLING=4;
+KineFilamentShader* queuedShader=nullptr;
 void kine_queue_mesh(KineFilamentContext* ctx,KineMesh* mesh,int,float,float,float,float,float,float,float,
-    const float*,bool,bool,bool,void*,uint64_t,float,KineBatchKey* key) {
+    const float*,bool,bool,bool,void*,KineFilamentShader* shader,uint64_t,float,KineBatchKey* key) {
+    queuedShader=shader;
     key->mesh=mesh; ctx->pendingBatches[*key].lastQueuedFrame=ctx->batchFrame;
 }
 """
@@ -194,6 +198,7 @@ int main() {
     ctx.batchFrame=9;
     KineFilamentDrawItem item; item.mesh=&mesh;
     Kine_Filament_DrawMeshListVersioned(&ctx,&item,1,7,1);
+    assert(queuedShader==nullptr);
     ctx.batchFrame=10;
     Kine_Filament_DrawMeshListVersioned(&ctx,nullptr,0,7,1);
     assert(ctx.pendingBatches[batch.key].lastQueuedFrame==10);
@@ -201,7 +206,11 @@ int main() {
     Kine_Filament_DrawMeshListVersioned(&ctx,nullptr,0,7,1);
     assert(ctx.builtBatches[batch.key].lastUsedFrame==11);
     assert(ctx.pendingBatches[batch.key].lastQueuedFrame==10); // no redundant upload
-    std::cout << "PASS native bounds, chunk coalescing, duplicate/invalid indices, retained recovery\n";
+    KineFilamentShader shader;
+    item.shader=&shader;
+    Kine_Filament_DrawMeshListVersioned(&ctx,&item,1,7,2);
+    assert(queuedShader==&shader);
+    std::cout << "PASS native bounds, chunk coalescing, duplicate/invalid indices, visibility, retained recovery, shader forwarding\n";
 }
 """
 

@@ -11,8 +11,15 @@ local function loadModule(path: string, imports: { [string]: any }): any
 	return runtime.luau.load(runtime.luau.compile(runtime.fs.readFile(path)), { env = env, chunk_name = path })()
 end
 local signal = loadModule("src/external/signal.luau", {})
+local enumInit = loadModule("src/environment/libraries/Enum/init.luau", {})
+local enumDump = loadModule("src/environment/libraries/Enum/dump.luau", {})
+local enumMap = loadModule("src/environment/libraries/Enum/map.luau", {
+	["@Enum"] = enumInit,
+	["./dump"] = enumDump,
+})
 local Instance = loadModule("src/environment/class/Instance.luau", {
 	["@Kinemium.signal"] = signal,
+	["@EnumMap"] = enumMap,
 	["../../engine/ffi/InstanceLifecycle"] = lifecycle,
 })
 local passed = 0

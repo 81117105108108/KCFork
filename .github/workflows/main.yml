@@ -41,6 +41,11 @@ jobs:
       - name: Install tools
         run: rokit install --no-trust-check
 
+      - name: Setup Python for headless tests and FFI validation
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Create sandboxed embed dir
         shell: bash
         run: mkdir -p build/.embedded/src/sandboxed
@@ -93,6 +98,16 @@ jobs:
         shell: bash
         run: |
           cmake --build external/build --config Release --parallel
+
+      - name: Validate built Jolt FFI export
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            windows-latest) library="external/build/bin/KinemiumLibs.dll" ;;
+            ubuntu-latest) library="external/build/bin/KinemiumLibs.so" ;;
+            macos-latest) library="external/build/bin/KinemiumLibs.dylib" ;;
+          esac
+          python tests/verify_ffi_symbols.py "$library"
 
       - name: Stage native runtime library
         shell: bash
@@ -220,6 +235,11 @@ jobs:
       - name: Remove .embedded folder
         shell: bash
         run: rm -rf build/${{ matrix.folder }}/.embedded
+
+      - name: Run headless functional tests
+        if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
+        run: zune run tests/run_tests.luau
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

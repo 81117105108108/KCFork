@@ -4490,7 +4490,6 @@ KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, in
         case 6:  m = buildCylinder(); break;
         case 5:  m = buildDisplacedCube(); break;
         case 4:  m = buildParticleQuad(); break;
-        case 6:  m = buildCylinder(); break;
         case 2:  m = buildSphere(); break;
         case 3:  m = buildPyramid(); break;
         default: m = buildCube();   break; // 1 = cube (default)
