@@ -41,16 +41,18 @@ local tempCharacterOutputVelocity = ffi.alloc(structs.JPH_Vec3:size(), structs.J
 
 -- Bulk transform marshaling (Phase 1): single FFI fills [BodyID:u32, Px:f32, Py:f32, Pz:f32, Qx:f32, Qy:f32, Qz:f32, Qw:f32]*N (32B stride).
 local BULK_STRIDE = 32
-local bulkIdsBuffer: buffer? = nil
-local bulkOutBuffer: buffer? = nil
+local bulkIdsBuffer: ffi.pointer? = nil
+local bulkOutBuffer: ffi.pointer? = nil
 local bulkCapacity = 0
-local bulkParts: { any } = {}
+local bulkParts: { [number]: any } = {}
+local bulkTransforms = {}
+local sleepingSynced = setmetatable({}, { __mode = "k" })
 
 local function ensureBulkCapacity(n: number)
 	if n <= bulkCapacity and bulkIdsBuffer ~= nil and bulkOutBuffer ~= nil then
 		return
 	end
-	local cap = math.max(n, 64)
+	local cap = math.max(n, 64, bulkCapacity * 2)
 	bulkIdsBuffer = ffi.alloc(cap * 4, 4)
 	bulkOutBuffer = ffi.alloc(cap * BULK_STRIDE, 4)
 	bulkCapacity = cap
@@ -149,6 +151,7 @@ local function trackBodyMotion(part, bodyID, motionType)
 		movingBodiesMap[part] = bodyID
 	else
 		movingBodiesMap[part] = nil
+		sleepingSynced[part] = nil
 	end
 end
 
@@ -410,7 +413,7 @@ local function createBody(bodyInterface, part, motionType)
 	return bodyID
 end
 
-local function CalculateBodyPhysics(part, bodyInterface, bodyID, assumeActive)
+local function CalculateBodyPhysics(part, bodyInterface, bodyID, assumeActive, finalCF, sleeping)
 	if part.Anchored then
 		return
 	end
@@ -418,14 +421,18 @@ local function CalculateBodyPhysics(part, bodyInterface, bodyID, assumeActive)
 		return
 	end
 
-	local position = tempBodyPosition
-	local rotation = tempBodyRotation
-
-	lib.JPH_BodyInterface_GetPositionAndRotation(bodyInterface, bodyID, position, rotation)
-
-	local posX = position:readf64(0)
-	local posY = position:readf64(8)
-	local posZ = position:readf64(16)
+	if not finalCF then
+		local position = tempBodyPosition
+		local rotation = tempBodyRotation
+		lib.JPH_BodyInterface_GetPositionAndRotation(bodyInterface, bodyID, position, rotation)
+		finalCF = bulkTransformToCFrame(
+			position:readf64(0), position:readf64(8), position:readf64(16),
+			rotation:readf32(0), rotation:readf32(4), rotation:readf32(8), rotation:readf32(12)
+		)
+	end
+	if sleeping then
+		return finalCF, Vector3.zero, Vector3.zero
+	end
 
 	local velocity = tempBodyLinear
 	local angular_vel = tempBodyAngular
@@ -441,50 +448,7 @@ local function CalculateBodyPhysics(part, bodyInterface, bodyID, assumeActive)
 	local angvelY = angular_vel:readf32(4)
 	local angvelZ = angular_vel:readf32(8)
 
-	local qx = rotation:readf32(0)
-	local qy = rotation:readf32(4)
-	local qz = rotation:readf32(8)
-	local qw = rotation:readf32(12)
-
-	local qlen = qx * qx + qy * qy + qz * qz + qw * qw
-	if qlen > 1e-12 and math.abs(qlen - 1) > 1e-6 then
-		local invLen = 1 / math.sqrt(qlen)
-		qx, qy, qz, qw = qx * invLen, qy * invLen, qz * invLen, qw * invLen
-	end
-
-	local xx, yy, zz = qx * qx, qy * qy, qz * qz
-	local xy, xz, yz = qx * qy, qx * qz, qy * qz
-	local wx, wy, wz = qw * qx, qw * qy, qw * qz
-
-	local r00 = 1 - 2 * (yy + zz)
-	local r01 = 2 * (xy - wz)
-	local r02 = 2 * (xz + wy)
-
-	local r10 = 2 * (xy + wz)
-	local r11 = 1 - 2 * (xx + zz)
-	local r12 = 2 * (yz - wx)
-
-	local r20 = 2 * (xz - wy)
-	local r21 = 2 * (yz + wx)
-	local r22 = 1 - 2 * (xx + yy)
-
-	-- Snap position to 0.001 precision without math.round overhead:
-	-- floor(x * 1000 + 0.5) / 1000 avoids the function call.
 	local f = math.floor
-	local finalCF = CFrame.new(
-		f(posX * 1000 + 0.5) * 0.001,
-		f(posY * 1000 + 0.5) * 0.001,
-		f(posZ * 1000 + 0.5) * 0.001,
-		r00,
-		r01,
-		r02,
-		r10,
-		r11,
-		r12,
-		r20,
-		r21,
-		r22
-	)
 
 	local linearVelocity
 	if velX * velX + velY * velY + velZ * velZ > 1e-8 then
@@ -2355,93 +2319,74 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				local _nSimulated = 0
 				-- Phase 1 bulk path: one FFI fills contiguous [BodyID u32 + Pxyz f32 + Qxyzw f32]*N.
 				local bulkOk = false
+				table.clear(bulkTransforms)
+				table.clear(bulkParts)
 				if lib.JPH_BodyInterface_GetBulkTransforms ~= nil then
 					local count = 0
 					for part, bodyID in pairs(movingBodiesMap) do
-						if part.Parent ~= nil then
+						if part.Parent ~= nil and not part.Anchored then
 							count += 1
 						end
 					end
 					if count > 0 then
 						ensureBulkCapacity(count)
-						local idsBuf = bulkIdsBuffer :: buffer
-						local outBuf = bulkOutBuffer :: buffer
-						table.clear(bulkParts)
+						local idsBuf = bulkIdsBuffer :: ffi.pointer
+						local outBuf = bulkOutBuffer :: ffi.pointer
 						local idx = 0
 						for part, bodyID in pairs(movingBodiesMap) do
-							if part.Parent ~= nil then
+							if part.Parent ~= nil and not part.Anchored then
 								idsBuf:writeu32(idx * 4, bodyID)
-								bulkParts[idx + 1] = part
+								bulkParts[bodyID] = part
 								idx += 1
 							end
 						end
 						local ok, written = pcall(lib.JPH_BodyInterface_GetBulkTransforms, bodyInterface, idsBuf, idx, outBuf, idx * BULK_STRIDE)
-						if ok and type(written) == "number" and written > 0 then
+						if ok and type(written) == "number" and written >= 0 and written <= idx and written % 1 == 0 then
 							bulkOk = true
 							for i = 0, written - 1 do
 								local base = i * BULK_STRIDE
 								local rowBodyID = outBuf:readu32(base)
-								local part = bulkParts[i + 1]
-								-- Guard against stale index alignment: fall back to inverseMap.
-								if part == nil or bodiesMap[part] ~= rowBodyID then
-									part = inverseMap[rowBodyID]
-								end
+								local part = bulkParts[rowBodyID]
 								if part == nil or part.Parent == nil or part.Anchored then
-									continue
+									bulkOk = false
+									break
 								end
-								_nSimulated += 1
-								local cf = bulkTransformToCFrame(
+								if bulkTransforms[part] ~= nil then
+									bulkOk = false
+									break
+								end
+								bulkTransforms[part] = bulkTransformToCFrame(
 									outBuf:readf32(base + 4), outBuf:readf32(base + 8), outBuf:readf32(base + 12),
 									outBuf:readf32(base + 16), outBuf:readf32(base + 20), outBuf:readf32(base + 24), outBuf:readf32(base + 28)
 								)
-								local currentCFrame = part.CFrame
-								local transformChanged = not currentCFrame or not currentCFrame:IsSameTransform(cf, 1e-4)
-								if transformChanged then
-									part.CFrame = cf
-									-- Preserve velocity behavior: fetch only when the transform moved.
-									local _, linear, angular = CalculateBodyPhysics(part, bodyInterface, rowBodyID, true)
-									if linear then
-										local currentLinear = part.AssemblyLinearVelocity
-										if not currentLinear or currentLinear:DistanceSquared(linear) > 1e-8 then
-											part.AssemblyLinearVelocity = linear
-										end
-									end
-									if angular then
-										local currentAngular = part.AssemblyAngularVelocity
-										if not currentAngular or currentAngular:DistanceSquared(angular) > 1e-8 then
-											part.AssemblyAngularVelocity = angular
-										end
-									end
-									rawset(part, "__matrixDirty", true)
-									rawset(part, "__partAABB", nil)
-									local batch = rawget(part, "__workspaceBatch")
-									if batch then
-										batch.instancesDirty = true
-									end
-									local chunk = rawget(part, "__workspaceChunk")
-									if chunk then
-										chunk.instanceDataDirty = true
-									end
-								end
 							end
 						end
 					else
 						bulkOk = true
 					end
 				end
-				if not bulkOk then
 				for part, bodyID in pairs(movingBodiesMap) do
-					if part.Parent == nil then
+					if part.Parent == nil or part.Anchored then
+						sleepingSynced[part] = nil
 						continue
 					end
 
-					if lib.JPH_BodyInterface_IsActive(bodyInterface, bodyID) == 0 then
-						continue
+					local cf = if bulkOk then bulkTransforms[part] else nil
+					local active = if bulkOk then cf ~= nil else lib.JPH_BodyInterface_IsActive(bodyInterface, bodyID) ~= 0
+					if active then
+						sleepingSynced[part] = nil
+						_nSimulated += 1
+					else
+						-- Also covers bodies that sleep before their first render sync.
+						-- Fetch the final pose once, then zero velocities without FFI.
+						if sleepingSynced[part] == bodyID then
+							cf = part.CFrame
+						end
+						sleepingSynced[part] = bodyID
 					end
 
-					_nSimulated += 1
-
-					local cf, linear, angular = CalculateBodyPhysics(part, bodyInterface, bodyID, true)
+					local linear, angular
+					cf, linear, angular = CalculateBodyPhysics(part, bodyInterface, bodyID, true, cf, not active)
 
 					if not cf or not part.Parent then
 						continue
@@ -2456,12 +2401,12 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 						end
 
 						local currentLinear = part.AssemblyLinearVelocity
-						if not currentLinear or currentLinear:DistanceSquared(linear) > 1e-8 then
+						if not currentLinear or currentLinear:DistanceSquared(linear) > (if active then 1e-8 else 0) then
 							part.AssemblyLinearVelocity = linear
 						end
 
 						local currentAngular = part.AssemblyAngularVelocity
-						if not currentAngular or currentAngular:DistanceSquared(angular) > 1e-8 then
+						if not currentAngular or currentAngular:DistanceSquared(angular) > (if active then 1e-8 else 0) then
 							part.AssemblyAngularVelocity = angular
 						end
 
@@ -2478,7 +2423,6 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 							end
 						end
 					end
-				end
 				end
 				local _syncDur = os.clock() - _syncStart
 				local moving = 0

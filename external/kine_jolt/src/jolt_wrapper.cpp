@@ -1099,18 +1099,20 @@ uint32_t JPH_BodyInterface_GetBulkTransforms(
 
     const uint32_t kStride = 32;
     uint32_t maxCount = outCapacityBytes / kStride;
-    uint32_t n = count < maxCount ? count : maxCount;
+    uint32_t written = 0;
     auto* dst = static_cast<uint8_t*>(outBuffer);
     JPH::BodyInterface* bi = ToBodyInterface(bodyInterface);
 
-    for (uint32_t i = 0; i < n; ++i)
+    for (uint32_t i = 0; i < count && written < maxCount; ++i)
     {
         const JPH_BodyID packed = ids[i];
+        if (!bi->IsActive(ToBodyID(packed)))
+            continue;
         JPH::RVec3 position;
         JPH::Quat rotation;
         bi->GetPositionAndRotation(ToBodyID(packed), position, rotation);
 
-        uint8_t* row = dst + (size_t)i * kStride;
+        uint8_t* row = dst + (size_t)written * kStride;
         memcpy(row + 0, &packed, 4);
         float px = (float)position.GetX();
         float py = (float)position.GetY();
@@ -1123,8 +1125,9 @@ uint32_t JPH_BodyInterface_GetBulkTransforms(
         memcpy(row + 20, &q.y, 4);
         memcpy(row + 24, &q.z, 4);
         memcpy(row + 28, &q.w, 4);
+        ++written;
     }
-    return n;
+    return written;
 }
 
 void JPH_BodyInterface_GetLinearVelocity(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, JPH_Vec3* outVelocity)

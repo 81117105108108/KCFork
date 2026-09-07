@@ -28,7 +28,15 @@ local function getLibraryPath(): string
 	return paths[1]
 end
 
-local jolt: typeof(funcs) = ffi.dlopen(getLibraryPath(), funcs)
+local path = getLibraryPath()
+local ok, jolt = pcall(ffi.dlopen, path, funcs)
+if not ok then
+	-- Zune resolves eagerly. Retry without only the optional Phase 1 symbol;
+	-- missing required symbols still fail instead of masking a broken library.
+	local required = table.clone(funcs)
+	required.JPH_BodyInterface_GetBulkTransforms = nil
+	jolt = ffi.dlopen(path, required)
+end
 
 return {
 	lib = jolt,

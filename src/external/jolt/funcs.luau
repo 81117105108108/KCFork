@@ -273,6 +273,8 @@ local JPH_BodyInterface_GetRotation = { returns = void, args = { ptr, u32, ptr }
 -- uint32_t JPH_BodyInterface_GetBulkTransforms(JPH_BodyInterfaceRef,
 --    const JPH_BodyID* ids, uint32_t count, void* outBuffer, uint32_t outCapacityBytes)
 -- Packs [BodyID:u32, Px:f32, Py:f32, Pz:f32, Qx:f32, Qy:f32, Qz:f32, Qw:f32]*N (32B stride).
+-- Optional at load time (wrapper retries without it for older libraries).
+-- Compacts active valid input IDs into 32-byte rows; capacity is in bytes.
 local JPH_BodyInterface_GetBulkTransforms = { returns = u32, args = { ptr, ptr, u32, ptr, u32 } }
 
 -- void JPH_BodyInterface_GetLinearVelocity(JPH_BodyInterfaceRef, JPH_BodyID,

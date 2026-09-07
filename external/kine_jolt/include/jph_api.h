@@ -431,7 +431,12 @@ JPH_API void JPH_BodyInterface_GetPositionAndRotation(
 
 JPH_API void JPH_BodyInterface_GetRotation(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, JPH_Quat* outRotation);
 
-// Bulk marshal: fills outBuffer with [BodyID:u32, Px:f32, Py:f32, Pz:f32, Qx:f32, Qy:f32, Qz:f32, Qw:f32]*count (32 bytes stride). Returns bodies written.
+// Bulk marshal: compact active input bodies into exact 32-byte records:
+// [BodyID:u32, Px:f32, Py:f32, Pz:f32, Qx:f32, Qy:f32, Qz:f32, Qw:f32].
+// IDs must be valid live IDs belonging to this interface. Call between updates,
+// without concurrent body mutation/destruction. Input/output storage must not overlap.
+// Returns at most floor(outCapacityBytes / 32) rows, in input order; skips inactive
+// bodies. Null arguments, zero count, or capacity below one record return zero.
 JPH_API uint32_t JPH_BodyInterface_GetBulkTransforms(
     JPH_BodyInterfaceRef bodyInterface,
     const JPH_BodyID* ids,
