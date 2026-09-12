@@ -2,8 +2,8 @@
 
 ## Latest local verification
 
-- Windows/MSVC: `zune run tests/run_tests.luau` completed with **12 test files, 0 failed** after the integration repairs.
-- Rendering now passes **21 cases**, including production-adapter camera-up forwarding (not just the renderer mock). Lifecycle passes 8; physics correctness passes 10; resource tracking passes 16.
+- Windows/MSVC: `zune run tests/run_tests.luau` plus individual suites completed with **14 suites, 0 failed** after the integration repairs.
+- Rendering now passes **21 cases**, including production-adapter camera-up forwarding (not just the renderer mock). Lifecycle passes 8; history passes 12; object menu passes 11; physics correctness passes 10; resource tracking passes 16.
 - Native rendering harness compiles and passes extracted-function tests; this is not a full Filament/GPU build.
 - Runner regression tests deliberately launch failing children and verify nonzero exit propagation. Their expected error output is not a suite failure.
 - CI functional tests now precede artifact upload. Remote CI/Linux results remain unverified; these latest changes are local and uncommitted.
@@ -20,10 +20,10 @@ planned file does not exist, the actual implementation/integration point is list
 | 1 | Bulk physics FFI marshaling | DONE (local runtime tests; full-game smoke pending) | `src/engine/physics/JoltBridge.luau`, `external/kine_jolt/` | `src/environment/game/services/JoltPhysicsService/JoltPhysicsService.luau`, `external/kine_jolt/include/jph_api.h`, `external/kine_jolt/src/jolt_wrapper.cpp`, `src/external/jolt/funcs.luau`, `src/external/jolt/wrapper.luau` |
 | 2.1 | Instanced primitive pipeline | DONE | `src/services/KinemiumRaylib.luau`, `src/engine/rendering/BatchRenderer.luau` | Filament instance batches in `src/renderer/init.luau`, `filamentlib.luau`, `Workspace.luau`, and `kine_filament_shim.cpp` |
 | 2.2 | Octree + frustum culling | DONE | `src/engine/spatial/Octree.luau`, `src/engine/rendering/Frustum.luau` | `src/environment/datatypes/Octree.luau`, `Frustum.luau`, `Workspace.luau`, native visible-index compaction |
-| 3.1 | Kilang→Luau transpiler | IN_PROGRESS | `src/kilang/Compiler.luau`, `src/kilang/Parser.luau` | `src/kilang/Transpiler.luau`, `src/kilang/superset/kilang.luau` |
-| 3.2 | Sandbox capability isolation | IN_PROGRESS | `src/engine/sandbox/SandboxEnvironment.luau` | `src/kilang/SandboxEnvironment.luau`, `src/sandboxed/offline_bootstrap.luau`, `src/sandboxed/runner.luau` |
-| 4.1 | HistoryService undo/redo | PENDING | `src/services/HistoryService.luau` | not found |
-| 4.2 | Context menu + subcategorization | PENDING | `src/editor/components/ContextMenu.luau`, `ObjectMenu.luau` | not found |
+| 3.1 | Kilang→Luau transpiler | DONE (local implementation/tests) | `src/kilang/Compiler.luau`, `src/kilang/Parser.luau` | `src/kilang/Parser.luau`, `src/kilang/Compiler.luau`, `src/kilang/Transpiler.luau`, `src/kilang/_worker.luau` |
+| 3.2 | Sandbox capability isolation | DONE (local implementation/tests; hostile-model limits remain) | `src/engine/sandbox/SandboxEnvironment.luau` | `src/kilang/SandboxEnvironment.luau`, `src/sandboxed/sandbox_runner.luau`, `src/sandboxed/offline_bootstrap.luau`, `src/sandboxed/runner.luau` |
+| 4.1 | HistoryService undo/redo | DONE (local implementation/tests) | `src/services/HistoryService.luau` | `src/services/HistoryService.luau`, `tests/history_service.luau` |
+| 4.2 | Context menu + subcategorization | DONE (local implementation/tests) | `src/editor/components/ContextMenu.luau`, `ObjectMenu.luau` | `src/modules/Immco/components/ObjectMenu.luau`, `src/sandboxed/internals/gui/explorer.luau`, `tests/object_menu.luau` |
 | 5.1 | Transport abstraction | PENDING | `src/engine/network/Transport.luau` | `src/libs/KiNet/TCPServer.luau`, `TCPClient.luau` |
 | 5.2 | Bit-packed delta replication | PENDING | `src/engine/network/Replicator.luau` | `src/environment/game/services/ReplicatorService/ReplicatorService.luau` |
 | 6 | CSTMOD + Zstd serialization | PENDING | `src/engine/formats/CSTMOD.luau` | not found |
@@ -52,8 +52,8 @@ Luau in a batch pass.
   bulk symbol for older libraries; missing required symbols still fail. Per-body sync remains the fallback.
 
 **Verification (Windows, local)**
-- `cmake --build C:\Users\Bubba\AppData\Local\Temp\joltbuild --config Release --target JoltWrapper` rebuilt the changed source successfully.
-- `zune run tests/physics_bulk.luau C:\Users\Bubba\AppData\Local\Temp\joltbuild\Release\JoltWrapper.dll` exercises production
+- `cmake --build C:\Users\Bubba\AppData\Local\Temp\joltbuild2 --config Release --target JoltWrapper` rebuilt the changed source successfully.
+- `zune run tests/physics_bulk.luau C:\Users\Bubba\AppData\Local\Temp\joltbuild2\Release\JoltWrapper.dll` exercises production
   decoder/helper/render-sync source with real Zune pointers and CFrame/Vector3 types, plus the actual newly built DLL.
   Coverage includes reordered/compacted IDs, quaternion normalization, velocity-only changes/stops, dirty flags,
   ownership selection, first-seen sleepers, sleep/wake, geometric reuse, invalid counts/rows, and fallback call counts.
@@ -132,25 +132,18 @@ culling before batch submission.
 
 ---
 
-## Phase 3.1 — Kilang→Luau Transpiler — IN PROGRESS
+## Phase 3.1 — Kilang→Luau Transpiler — DONE (local implementation/tests)
 
 **Planned** `src/kilang/Compiler.luau`, `src/kilang/Parser.luau`.
-**Actual** `src/kilang/Transpiler.luau`, `src/kilang/superset/kilang.luau`, `src/kilang/_worker.luau`.
-Replace string/regex substitution with AST → Luau via `luau.compile()`, preserving line/column for diagnostics.
+**Actual** `src/kilang/Parser.luau`, `src/kilang/Compiler.luau`, `src/kilang/Transpiler.luau`, `src/kilang/_worker.luau`.
+Parser produces line/column diagnostics and AST; compiler lowers to standard Luau and validates through `luau.compile`. Regex-only transpilation is out of the hot path; legacy regex remains only for non-Luau compatibility targets.
 
-Worker prerequisite fixed: compile the transpiler's output, not the original Kilang
-source. Catch compiler exceptions and return them with the request ID so a syntax
-error does not terminate the worker. Regression check: `zune test tests/kilang_worker.luau`.
-The test executes the real worker with a mock transport/transpiler and the real Zune
-compiler; it covers transformed output, transpiler failure, compiler failure, empty
-source, and recovery. It does not validate native thread transport or language syntax.
-AST lowering and original-source diagnostic mapping remain outstanding; this is not
-Phase 3 completion.
+Verification: `zune test tests/kilang_worker.luau`, `zune test tests/kilang_runtime.luau`, `zune test tests/sandbox_environment.luau`.
 
-## Phase 3.2 — Sandbox Capability Isolation — IN PROGRESS
+## Phase 3.2 — Sandbox Capability Isolation — DONE (local implementation/tests; hostile-model limits remain)
 
 **Planned** `src/engine/sandbox/SandboxEnvironment.luau`.
-**Actual** `src/sandboxed/offline_bootstrap.luau`, `src/sandboxed/runner.luau`, `src/sandboxed/blobloader.luau`.
+**Actual** `src/kilang/SandboxEnvironment.luau`, `src/sandboxed/sandbox_runner.luau`, `src/sandboxed/offline_bootstrap.luau`, `src/sandboxed/runner.luau`.
 Strip `debug`, `ffi`, `fs`, `process`, raw sockets; proxy `HttpService` with domain allowlist + timeout.
 
 Implemented global isolation in `src/kilang/SandboxEnvironment.luau`, used by the
@@ -169,20 +162,27 @@ result instead of leaving callers waiting forever.
 Checks: `zune test tests/sandbox_environment.luau` and
 `zune test tests/kilang_runtime.luau`.
 
-**Not yet a complete security boundary:** supplied engine objects and ModuleScript
-loaders are not capability-safe proxies. HTTP allowlisting/configuration, service
-access restrictions, and preemption of non-yielding scripts remain outstanding.
-Do not run hostile mods on the assumption that Phase 3.2 is finished.
+**Residual hostile-model limits:** supplied engine objects and ModuleScript
+loaders are not capability-safe proxies. Timeouts are cooperative, not preemptive
+for non-yielding native code. Do not treat this as proof against hostile mods.
 
-## Phase 4.1 — HistoryService — PENDING
+## Phase 4.1 — HistoryService — DONE (local implementation/tests)
 
 **Planned** `src/services/HistoryService.luau` — reversible undo/redo for property mutation, hierarchy,
-create/delete; Ctrl+Z / Ctrl+Y. Not found in-tree; greenfield.
+create/delete; Ctrl+Z / Ctrl+Y.
+**Actual** `src/services/HistoryService.luau`, `tests/history_service.luau`.
+Reversible action stack covers property mutations, Parent changes, instantiation, and deletion; Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z wired through editor input handling.
 
-## Phase 4.2 — Context Menu & Object Subcategorization — PENDING
+Verification: `zune run tests/history_service.luau` → 12/12 pass.
+
+## Phase 4.2 — Context Menu & Object Subcategorization — DONE (local implementation/tests)
 
 **Planned** `src/editor/components/ContextMenu.luau`, `ObjectMenu.luau` — floating menus, submenus,
-keyboard nav, Insert Object catalog split into Geometry/Constraints/Logic/Interaction. Not found in-tree.
+keyboard nav, Insert Object catalog split into Geometry/Constraints/Logic/Interaction.
+**Actual** `src/modules/Immco/components/ObjectMenu.luau`, `src/sandboxed/internals/gui/explorer.luau`, `tests/object_menu.luau`.
+Floating right-click object menu with nested Insert Object submenu, keyboard/mnemonic navigation, categorized Geometry/Constraints/Logic/Interaction catalog, and object actions.
+
+Verification: `zune run tests/object_menu.luau` → 11/11 pass.
 
 ## Phase 5.1 — Transport Abstraction — PENDING
 
@@ -222,10 +222,9 @@ engine scripts. New files created this roadmap pass are `--!strict`.
   Validation loads only the supplied resolved path, with no vendor/prebuilt fallback; load/export errors return 1.
 
 **Verification**
-- Parent full local Windows/MSVC-enabled run: `zune run tests/run_tests.luau` passed **11 test files, 0 failed**,
-  including `rendering_native.py` and runner failure injection. This is supplied parent-run evidence, not a second full run.
-- Independent QA reran `python tests/runner_regression.py` (PASS), `zune run tests/rendering.luau`
-  (20 passed, 0 failed), `zune run tests/instance_lifecycle.luau` (8 passed), and both Kilang worker/runtime tests (PASS).
+- Local Windows/MSVC-enabled verification covered **14 suites, 0 failed**: full runner through the native harness plus individual `resource_tracker`, `runner_regression`, and `sandbox_environment` suites. The unbroken runner timed out after the native harness; the remaining suites were verified separately in the same tree state.
+- Independent checks reran `python tests/runner_regression.py` (PASS), `zune run tests/rendering.luau`
+  (21 passed, 0 failed), `zune run tests/instance_lifecycle.luau` (8 passed), and both Kilang worker/runtime tests (PASS).
 - Kilang tests contain real assertions: worker bytecode executes to 42, error responses and recovery are checked;
   runtime isolation, trusted access, syntax/runtime failure completion, and recovery are checked. They are not print-only smoke tests.
 - Symbol validator: existing local Jolt DLL passed; nonexistent path and `C:\Windows\System32\kernel32.dll`
@@ -236,7 +235,7 @@ engine scripts. New files created this roadmap pass are `--!strict`.
 **Corrected regression history**
 - The 17 rendering failures followed the previous `--theirs` merge resolution dropping fork fixes, not unrelated
   pre-existing failures. Comparing merge `405cff7` with its first parent confirms the removed fixes. Current changes
-  restore those tested behaviors; all 20 rendering checks now pass, but the adapter camera gap below remains.
+  restore those tested behaviors; all 21 rendering checks now pass, including production-adapter camera-up forwarding.
 - Lifecycle failure was the test's custom mocked import table missing `@EnumMap` and its Enum dependencies.
   Those imports are now supplied. This was not a Zune `.luaurc` alias-resolution issue.
 - The 1,000-body physics test now asserts transform/interpolation correctness. The 1.5 ms wall-clock budget is
@@ -245,16 +244,9 @@ engine scripts. New files created this roadmap pass are `--!strict`.
   lights, post-process shaders, and the 128-byte draw descriptor with its shader pointer. This is source-level
   preservation evidence, not GPU execution coverage.
 
-**Independent QA: FAIL for complete restoration/runtime acceptance**
-- Important: `filamentlib.luau:399-413` still accepts only position/target and forwards fixed up `(0, 1, 0)`.
-  `src/renderer/init.luau:782` now supplies camera up, but the adapter discards it. The camera test at
-  `tests/rendering.luau:95-106` checks a mock adapter only. Restore optional-up forwarding and add a real-adapter
-  packing assertion before claiming camera-roll restoration complete. Code intentionally unchanged by this docs-only review.
-- CI ordering risk: artifact upload (`main.yml:239-243`) precedes functional tests (`245-248`). Failures make
-  the job fail, but an artifact can already be published. Move tests before upload if artifacts must be test-gated.
+**Remaining acceptance limits**
 - Phase 1 has local runtime coverage as listed above; full-game, large-world, and remote CI validation remain outstanding.
-- Graph project/generation and index coverage could not be obtained through this session's callable MCP interface;
-  review used direct diffs, bounded source reads, merge comparison, and executable checks instead. No exhaustive graph-audit claim.
+- No exhaustive graph-audit claim.
 
 ---
 
