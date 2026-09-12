@@ -1,5 +1,6 @@
 local StudioThemeService = game:GetService("StudioThemeService")
 local Immco = require("@Immco")
+local ObjectMenu = Immco.ObjectMenu
 local theme = StudioThemeService.SelectedTheme
 local Selection = game:GetService("Selection")
 local Argon = require("@Argon")
@@ -49,9 +50,17 @@ local createMenu = {
 	x = 0,
 	y = 0,
 	parent = nil,
+	items = nil,
 	suppressInput = false,
 }
-local createClassItems = nil
+local objectMenuState = {
+	visible = false,
+	x = 0,
+	y = 0,
+	target = nil,
+	items = nil,
+	suppressInput = false,
+}
 
 local canInteract = true
 
@@ -63,11 +72,7 @@ local nonCreatableClassNames = {
 	WorldObject2D = true,
 }
 
-local function getCreateClassItems()
-	if createClassItems then
-		return createClassItems
-	end
-
+local function collectCreatableNames()
 	local classes = if Instance.getClasses then Instance.getClasses() else {}
 	local names = {}
 
@@ -77,33 +82,94 @@ local function getCreateClassItems()
 		end
 	end
 
-	table.sort(names)
+	return names
+end
 
-	createClassItems = {}
-	for _, className in ipairs(names) do
-		local itemClassName = className
-		table.insert(createClassItems, {
-			text = itemClassName,
-			callback = function()
-				local parent = createMenu.parent
-				if not parent or parent.Destroyed then
-					return
-				end
-
-				local ok, created = pcall(Instance.new, itemClassName)
-				if not ok or not created then
-					warn(`Failed to create {itemClassName}: {created}`)
-					return
-				end
-
-				created.Parent = parent
-				expanded[parent] = true
-				Selection.Set({ created })
-			end,
-		})
+local function insertIntoParent(className, parent)
+	if not parent or parent.Destroyed then
+		return
 	end
 
-	return createClassItems
+	local ok, created = pcall(Instance.new, className)
+	if not ok or not created then
+		warn(`Failed to create {className}: {created}`)
+		return
+	end
+
+	created.Parent = parent
+	expanded[parent] = true
+	Selection.Set({ created })
+end
+
+local function getInsertMenuItems(parent)
+	return ObjectMenu.buildInsertItems(collectCreatableNames(), function(className)
+		insertIntoParent(className, parent)
+	end)
+end
+
+local function openObjectMenu(target)
+	local mouse = Argon:GetMousePosition()
+	Selection.Set({ target })
+	createMenu.visible = false
+	createMenu.parent = nil
+	createMenu.items = nil
+	objectMenuState.visible = true
+	objectMenuState.x = mouse.X
+	objectMenuState.y = mouse.Y
+	objectMenuState.target = target
+	objectMenuState.suppressInput = true
+	objectMenuState.items = ObjectMenu.buildObjectItems({
+		targetName = target.Name,
+		insertNames = collectCreatableNames(),
+		onInsert = function(className)
+			insertIntoParent(className, target)
+		end,
+		onDelete = function()
+			if not target.Destroyed then
+				target:Destroy()
+			end
+		end,
+		onDuplicate = function()
+			if target.Destroyed then
+				return
+			end
+			local ok, clone = pcall(function()
+				return target:Clone()
+			end)
+			if ok and clone then
+				clone.Parent = target.Parent
+				Selection.Set({ clone })
+			end
+		end,
+		onGroup = function()
+			if target.Destroyed then
+				return
+			end
+			local ok, model = pcall(Instance.new, "Model")
+			if not ok or not model then
+				return
+			end
+			model.Name = "Model"
+			model.Parent = target.Parent
+			target.Parent = model
+			expanded[model] = true
+			Selection.Set({ model })
+		end,
+		onUngroup = function()
+			if target.Destroyed or target.ClassName ~= "Model" then
+				return
+			end
+			local parent = target.Parent
+			local children = target:GetChildren()
+			for _, child in ipairs(children) do
+				child.Parent = parent
+			end
+			target:Destroy()
+			Selection.Set(children)
+		end,
+	})
+	canInteract = false
+	renderer.UpdateCamera = false
 end
 
 local uiScale = 1
@@ -466,10 +532,14 @@ renderer.Pool.new("2d", function()
 							local plusHitbox = clipHitboxToViewport(plusRect)
 							if plusHitbox and renderer:HasClicked(plusHitbox) and canInteract then
 								Selection.Set({ instance })
+								objectMenuState.visible = false
+								objectMenuState.target = nil
+								objectMenuState.items = nil
 								createMenu.visible = true
 								createMenu.x = plusRect.x + plusRect.width + (4 * uiScale)
 								createMenu.y = plusRect.y
 								createMenu.parent = instance
+								createMenu.items = getInsertMenuItems(instance)
 								createMenu.suppressInput = true
 								canInteract = false
 								renderer.UpdateCamera = false
@@ -543,6 +613,12 @@ renderer.Pool.new("2d", function()
 							end
 						end
 
+						if rowHitbox and canInteract and not createMenu.visible and not objectMenuState.visible then
+							if Argon:IsMouseButtonPressed(Argon.MouseButton.Right) then
+								openObjectMenu(instance)
+							end
+						end
+
 						if hasChildren then
 							local arrow = expanded[instance] and expandedIcon or arrowRight
 
@@ -608,9 +684,12 @@ renderer.Pool.new("2d", function()
 					y = math.max(absolutePosition.Y + 35, menuY),
 					width = 220,
 					MaxHeight = menuHeight,
-					items = getCreateClassItems(),
+					items = createMenu.items or {},
 					EnableSearch = true,
 					SearchPlaceholder = "Search classes...",
+					EnableKeyboard = true,
+					EnableMnemonics = true,
+					OpenSubmenusOnHover = true,
 					SuppressInput = createMenu.suppressInput,
 					RetainedStorage = contextMenuStorage,
 					renderer = renderer,
@@ -619,11 +698,44 @@ renderer.Pool.new("2d", function()
 					onClose = function()
 						createMenu.visible = false
 						createMenu.parent = nil
+						createMenu.items = nil
 						canInteract = true
 						renderer.UpdateCamera = true
 					end,
 				}, dt)
 				createMenu.suppressInput = false
+			end
+
+			if objectMenuState.visible then
+				local menuHeight = math.max(120, math.min(absoluteSize.Y - 55, 420))
+				local menuX = math.min(objectMenuState.x, absolutePosition.X + absoluteSize.X - 250)
+				local menuY = math.min(objectMenuState.y, absolutePosition.Y + absoluteSize.Y - menuHeight - 8)
+
+				Immco.ContextMenu({
+					id = "explorer-object-menu",
+					x = math.max(absolutePosition.X + 8, menuX),
+					y = math.max(absolutePosition.Y + 35, menuY),
+					width = 240,
+					MaxHeight = menuHeight,
+					items = objectMenuState.items or {},
+					EnableSearch = false,
+					EnableKeyboard = true,
+					EnableMnemonics = true,
+					OpenSubmenusOnHover = true,
+					SuppressInput = objectMenuState.suppressInput,
+					RetainedStorage = contextMenuStorage,
+					renderer = renderer,
+					engine_window = renderer.Window,
+					theme = theme,
+					onClose = function()
+						objectMenuState.visible = false
+						objectMenuState.target = nil
+						objectMenuState.items = nil
+						canInteract = true
+						renderer.UpdateCamera = true
+					end,
+				}, dt)
+				objectMenuState.suppressInput = false
 			end
 		end,
 	}, dt)
