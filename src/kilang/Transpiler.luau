@@ -1,5 +1,6 @@
 local Transpiler = {}
 
+local Compiler = require("./Compiler")
 local default = require("./superset/kilang")
 local cpp = require("./superset/cpp")
 
@@ -27,6 +28,8 @@ local function resolveLang(lang, code)
 end
 
 function Transpiler.run(code, lang, gsubFuncs, dataThread)
+	-- Legacy regex engine. Kept for cpp/typescript/custom-language compatibility.
+	-- The `kilang` hot path no longer uses this; see Transpiler.runLang below.
 	local env = lang.env or {}
 
 	local strings = {}
@@ -131,6 +134,21 @@ function Transpiler.registerLang(name, rules)
 end
 
 function Transpiler.runLang(code, name)
+	if name == "kilang" then
+		-- Primary hot path: dedicated Parser -> AST -> Compiler pipeline.
+		-- Emits standard Luau and preserves source line/column diagnostics.
+		local luauCode, meta = Compiler.compileSource(code, "kilang")
+		if luauCode == nil then
+			error(tostring(meta), 0)
+		end
+		local m = meta :: any
+		local dataThread = {
+			variables = m.variables or {},
+			flags = m.flags or {},
+			annotations = m.annotations or {},
+		}
+		return luauCode :: string, dataThread
+	end
 	local lang = langs[name]
 	if not lang then
 		error("Language not registered: " .. name)

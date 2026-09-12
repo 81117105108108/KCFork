@@ -15,14 +15,26 @@ kilang.renderer = nil
 kilang.env = {}
 kilang.threads = {}
 
---  Internal: bytecode compile + load + exec
+--  Internal: diagnostics + bytecode compile + load + exec
+
+local function normalizeDiagnostic(chunk: string, err: unknown): string
+	local msg = tostring(err)
+	if msg:match("^[^:]+:%d+:%d+:") then
+		return msg
+	end
+	local line, rest = msg:match("^.-:(%d+):%s*(.*)$")
+	if line then
+		return (`{chunk}:{line}:1: {rest}`)
+	end
+	return (`{chunk}:1:1: {msg}`)
+end
 
 local function run_code(code: string, env: SandboxEnvironment.Environment, chunk: string, native_code_gen: boolean): (unknown, boolean, unknown)
 	local compiled, bytecode = pcall(luau.compile, code, {
 		optimization_level = 2,
 	})
 	if not compiled then
-		return nil, false, tostring(bytecode)
+		return nil, false, normalizeDiagnostic(chunk, bytecode)
 	end
 
 	local trusted = env.SecurityCapabilities == 2
@@ -158,7 +170,16 @@ function kilang:execute(code, opts, env_other)
 	local success, result
 	local isFinished = false
 	local thread = task.spawn(function()
-		local _, s, r = run_code(code, environment, id, true)
+		-- Hot path: Kilang source -> Parser/AST/Compiler -> standard Luau.
+		local transpileOk, transpiled = pcall(preprocessor.runLang, code, superset)
+		if not transpileOk then
+			success = false
+			result = normalizeDiagnostic(id, transpiled)
+			isFinished = true
+			print(`[Kilang Error] {id}: {tostring(result)}`)
+			return
+		end
+		local _, s, r = run_code(transpiled :: string, environment, id, true)
 		success = s
 		result = r
 		isFinished = true
